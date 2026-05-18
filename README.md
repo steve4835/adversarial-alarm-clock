@@ -11,10 +11,9 @@ Built on an ESP32. No snooze button. No mercy.
 Most alarm clocks fail because dismissing them requires no effort. Roll over, tap a button, go back to sleep. This clock is designed so that the only way to silence it is to get up and go somewhere else. By the time you've done that, you're up.
 
 - **No snooze.** Ever.
-- **Strobe light** fires 5 minutes before the buzzer, so you can't claim you didn't know it was coming.
-- **Dismiss button is in the kitchen.** Or anywhere that isn't your bed.
-- **NFC tag** on the coffee maker as a secondary dismiss method — tap your phone to it, alarm stops, coffee starts. You're already there.
-- **Escalating buzzer** — slow beeps become rapid screech over 3 minutes if you somehow ignore everything else.
+- **Strobe light** fires 5 minutes before the buzzer so you can't claim you didn't know it was coming.
+- **NFC tag** on the coffee maker — tap your phone to it, alarm stops, coffee starts. You're already there.
+- **Escalating buzzer** — slow beeps become continuous screech over 3 minutes if you somehow ignore everything else.
 
 ---
 
@@ -27,11 +26,10 @@ Most alarm clocks fail because dismissing them requires no effort. Roll over, ta
 | RTC | DS3231 module | I2C, addr 0x68, shared bus with display |
 | Strobe | 12VDC xenon strobe beacon, 60 FPM | Switched via relay |
 | Relay | Opto-isolated relay module, 5V coil | Controls strobe power |
-| Buzzer | Passive piezo buzzer | Driven via `tone()`, GPIO 18 |
+| Buzzer | Active buzzer | Driven via `digitalWrite()`, GPIO 18 |
 | Power | 3S LiPo + 12V BMS + buck converter (12V→5V) | 12V rail for strobe, 5V for ESP32 |
 | Power input | Panel-mount 5.5mm barrel jack | 12VDC in |
 | Enclosure | 230×150×85mm ABS project box | |
-| Dismiss button | Panel-mount momentary switch | Mounted in kitchen, long cable |
 | NFC tag | NTAG215 sticker | On coffee maker, dismiss via iOS Shortcuts |
 
 ### Wiring
@@ -39,39 +37,39 @@ Most alarm clocks fail because dismissing them requires no effort. Roll over, ta
 ```
 ESP32 GPIO  │ Connected to
 ────────────┼─────────────────────────────────────────
-4           │ DS3231 INT/SQW (active low, INPUT_PULLUP)
 5           │ Relay module IN (HIGH = strobe on)
-18          │ Piezo buzzer (+)
+18          │ Active buzzer (+)
 21 (SDA)    │ HT16K33 SDA + DS3231 SDA
 22 (SCL)    │ HT16K33 SCL + DS3231 SCL
 3.3V        │ HT16K33 VCC, DS3231 VCC
-GND         │ HT16K33 GND, DS3231 GND, buzzer (-)
+GND         │ HT16K33 GND, DS3231 GND, buzzer (−)
 
 12V rail    │ Strobe (+), relay COM/NO
 5V rail     │ ESP32 VIN, relay coil VCC
 ```
 
-> **Note:** The DS3231 INT/SQW pin is used as a hardware alarm interrupt, not a square wave output. `DS3231_OFF` mode is set in firmware to enable this.
+> The DS3231 INT/SQW pin is not used. Alarm timing is handled entirely in software — the main loop checks the RTC time once per second and triggers the strobe and buzzer directly.
 
 ---
 
 ## Alarm Sequence
 
 ```
-T - 5 min   DS3231 hardware interrupt fires
+T − 1 min   Loop detects strobe window
             → Strobe relay switches ON
-            → DS3231 re-armed for alarm time
 
-T + 0 min   DS3231 hardware interrupt fires again
-            → Buzzer starts (slow beeps, 880Hz)
+T + 0 min   Loop detects alarm time
+            → Buzzer starts (slow beeps)
 
-T + 1 min   Buzzer cadence increases (1200Hz, faster)
-T + 2 min   Rapid beeps (1800Hz)
-T + 3 min   Continuous screech (2400Hz, no gaps)
+T + 1 min   Buzzer cadence increases (faster beeps)
+T + 2 min   Rapid beeps
+T + 3 min   Continuous (no gaps)
 
 Dismiss     Buzzer off, strobe off
-            DS3231 re-armed for next scheduled alarm day
+            Today marked cancelled — alarm resumes tomorrow
 ```
+
+Alarm times are checked once per second. The DS3231 is used only as a time source; no alarm registers or interrupts are used.
 
 ---
 
@@ -79,12 +77,13 @@ Dismiss     Buzzer off, strobe off
 
 The same endpoint handles both cases correctly:
 
-- **Before alarm fires** — cancels today's alarm, re-arms for the next scheduled day
-- **During alarm** — silences buzzer and strobe immediately, re-arms for next day
+- **Before alarm fires** — cancels today's alarm; resumes at the next scheduled day
+- **During alarm** — silences buzzer and strobe immediately; resumes at the next scheduled day
+
+Setting any alarm time after dismissing automatically un-cancels today.
 
 | Method | Command |
 |---|---|
-| Kitchen button | Press the wired momentary switch |
 | HTTP | `curl -X POST http://<clock-ip>/dismiss` |
 | MQTT | `mosquitto_pub -h <broker-ip> -t alarm/dismiss -m 1` |
 | NFC | Tap phone to tag → iOS Shortcut POSTs to `/dismiss` |
@@ -97,7 +96,7 @@ Each day of the week has its own alarm time and enabled state. Defaults to Mon�
 
 ### Web UI
 
-Browse to `http://<clock-ip>/` — a simple table with time pickers and checkboxes for each day. Mobile-friendly.
+Browse to `http://<clock-ip>/` — a table with time pickers and checkboxes for each day, plus a live status panel showing the current state, next scheduled alarm, and whether today is cancelled.
 
 ### HTTP API
 
@@ -108,11 +107,15 @@ curl -X POST "http://<clock-ip>/alarm?day=mon&h=6&m=30"
 # Disable Saturday
 curl -X POST "http://<clock-ip>/alarm?day=sat&enabled=0"
 
-# Status
+# Status (JSON)
 curl http://<clock-ip>/status
 ```
 
+Status response fields: `time`, `state` (idle/strobe/alarm), `cancelled`, `rtc`, `wifi_rssi`, `next_day`, `next_alarm`, `next_strobe`.
+
 ### MQTT
+
+MQTT is disabled by default (`MQTT_ENABLED = false` in `main.cpp`). To enable, set it to `true` and configure the broker in `secrets.ini`.
 
 ```bash
 # Set Wednesday to 07:00
@@ -124,8 +127,6 @@ mosquitto_pub -h <broker-ip> -t alarm/set/sun -m "off"
 # Dismiss
 mosquitto_pub -h <broker-ip> -t alarm/dismiss -m 1
 ```
-
-MQTT topics:
 
 | Topic | Payload | Action |
 |---|---|---|
@@ -142,9 +143,9 @@ Schedule is persisted to NVS — survives reboots and power loss.
 ## Time Sync
 
 - **NTP** sync on boot via `pool.ntp.org` and `time.nist.gov`
-- **DS3231 RTC** updated from NTP on boot and every 6 hours
-- If WiFi is unavailable, DS3231 holds time independently (coin cell on module)
-- Timezone configured via POSIX TZ string — DST handled automatically
+- **DS3231 RTC** is set to **local time** (not UTC) on boot and re-synced every 6 hours
+- If WiFi is unavailable, the DS3231 holds local time independently (coin cell on module)
+- Timezone configured via POSIX TZ string in `secrets.ini` — DST handled automatically
 
 ---
 
@@ -165,22 +166,24 @@ Tapping the phone to the sticker silently POSTs to the clock. No app needed.
 ### Prerequisites
 
 - [VS Code](https://code.visualstudio.com/) + [PlatformIO extension](https://platformio.org/install/ide?install=vscode)
-- Mosquitto MQTT broker on your network:
-  ```bash
-  sudo apt install mosquitto mosquitto-clients
-  sudo systemctl enable --now mosquitto
-  ```
 
 ### Configuration
 
-Edit the top of `src/main.cpp`:
+Copy `secrets.ini.example` to `secrets.ini` and fill in your values:
 
-```cpp
-const char* WIFI_SSID      = "YOUR_SSID";
-const char* WIFI_PASSWORD  = "YOUR_PASSWORD";
-const char* OTA_PASSWORD   = "YOUR_OTA_PASSWORD";
-const char* MQTT_BROKER    = "192.168.1.x";      // your broker's IP
-const char* TZ_STRING      = "CST6CDT,M3.2.0,M11.1.0"; // your timezone
+```ini
+[secrets]
+build_flags =
+  -DCONF_WIFI_SSID=\"your-ssid\"
+  -DCONF_WIFI_PASSWORD=\"your-wifi-password\"
+  -DCONF_OTA_HOSTNAME=\"alarm-clock\"
+  -DCONF_OTA_PASSWORD=\"your-ota-password\"
+  -DCONF_TZ_STRING=\"CST6CDT,M3.2.0,M11.1.0\"
+  -DCONF_NTP_SERVER1=\"pool.ntp.org\"
+  -DCONF_NTP_SERVER2=\"time.nist.gov\"
+  -DCONF_MQTT_BROKER=\"192.168.1.x\"
+  -DCONF_MQTT_PORT=1883
+  -DCONF_MQTT_CLIENT_ID=\"alarm-clock\"
 ```
 
 Common timezone strings:
@@ -195,31 +198,25 @@ Common timezone strings:
 ### First Flash (USB)
 
 ```bash
-# In PlatformIO terminal, or click Upload in VS Code
 pio run --target upload
-
-# Open serial monitor to see IP address and sync status
-pio device monitor
+pio device monitor --baud 115200
 ```
 
 If you get permission denied on `/dev/ttyUSB0`:
 ```bash
-sudo usermod -aG uucp $USER   # or dialout, check: ls -la /dev/ttyUSB0
+sudo usermod -aG uucp $USER   # or dialout — check: ls -la /dev/ttyUSB0
 # log out and back in
 ```
 
 ### OTA (All Subsequent Flashes)
 
-Once running, note the IP from the serial monitor. Edit `platformio.ini`:
+Note the IP from the serial monitor, then edit `platformio.ini`:
 
 ```ini
-; Comment out default USB upload, uncomment OTA:
 upload_protocol = espota
 upload_port     = 192.168.x.x
 upload_flags    = --auth=YOUR_OTA_PASSWORD
 ```
-
-Then flash normally — PlatformIO uploads over WiFi.
 
 ---
 
@@ -228,6 +225,8 @@ Then flash normally — PlatformIO uploads over WiFi.
 ```
 adversarial-alarm-clock/
 ├── platformio.ini
+├── secrets.ini          ← created from secrets.ini.example, not committed
+├── secrets.ini.example
 ├── README.md
 └── src/
     └── main.cpp

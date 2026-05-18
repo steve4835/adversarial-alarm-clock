@@ -5,7 +5,7 @@
  *   ESP32 DevKit
  *   Adafruit 1.2" HT16K33 4-digit 7-segment display (I2C 0x70)
  *   DS3231 RTC (I2C 0x68)
- *   Piezo buzzer         → GPIO_BUZZER (PWM via tone())
+ *   Piezo buzzer         → GPIO_BUZZER (drives active buzzer via digitalWrite)
  *   Opto-isolated relay  → GPIO_RELAY  (strobe on/off)
  *   DS3231 INT/SQW       → GPIO_RTC_INT (hardware alarm interrupt)
  *   Buck converter: 12V → 5V → ESP32 VIN
@@ -45,27 +45,28 @@
 #include <Preferences.h>
 
 // ============================================================
-// Configuration — edit these
+// Configuration — set in secrets.ini (see secrets.ini.example)
 // ============================================================
-const char* WIFI_SSID      = "YOUR_SSID";
-const char* WIFI_PASSWORD  = "YOUR_PASSWORD";
-const char* OTA_HOSTNAME   = "alarm-clock";
-const char* OTA_PASSWORD   = "YOUR_OTA_PASSWORD";
+const char* WIFI_SSID      = CONF_WIFI_SSID;
+const char* WIFI_PASSWORD  = CONF_WIFI_PASSWORD;
+const char* OTA_HOSTNAME   = CONF_OTA_HOSTNAME;
+const char* OTA_PASSWORD   = CONF_OTA_PASSWORD;
 
 // POSIX timezone — US Central with auto DST
-const char* TZ_STRING      = "CST6CDT,M3.2.0,M11.1.0";
-const char* NTP_SERVER1    = "pool.ntp.org";
-const char* NTP_SERVER2    = "time.nist.gov";
+const char* TZ_STRING      = CONF_TZ_STRING;
+const char* NTP_SERVER1    = CONF_NTP_SERVER1;
+const char* NTP_SERVER2    = CONF_NTP_SERVER2;
 
 // MQTT — point at your Mosquitto broker's IP
-const char* MQTT_BROKER    = "192.168.1.x";   // <-- edit this
-const int   MQTT_PORT      = 1883;
-const char* MQTT_CLIENT_ID = "alarm-clock";
+const char* MQTT_BROKER    = CONF_MQTT_BROKER;
+const int   MQTT_PORT      = CONF_MQTT_PORT;
+const char* MQTT_CLIENT_ID = CONF_MQTT_CLIENT_ID;
+const bool MQTT_ENABLED    = false;
 
 // Timing
 const unsigned long NTP_SYNC_INTERVAL = 6UL * 60 * 60 * 1000; // 6 hours
 const unsigned long MQTT_RECONNECT_MS = 5000;
-const int           STROBE_LEAD_MIN   = 5;  // strobe on N minutes before buzzer
+const int           STROBE_LEAD_MIN   = 1;  // strobe on N minutes before buzzer
 
 // Display
 const uint8_t DISPLAY_BRIGHTNESS = 8; // 0–15
@@ -73,9 +74,8 @@ const uint8_t DISPLAY_BRIGHTNESS = 8; // 0–15
 // ============================================================
 // Pins
 // ============================================================
-#define GPIO_RTC_INT   4   // DS3231 INT/SQW, active low when alarm fires
 #define GPIO_RELAY     5   // opto-isolated relay → strobe (HIGH = on)
-#define GPIO_BUZZER   18   // piezo buzzer via tone()
+#define GPIO_BUZZER   18   // piezo buzzer via digitalWrite()
 // I2C: SDA=21, SCL=22 (Wire library defaults)
 
 // ============================================================
@@ -107,8 +107,7 @@ unsigned long lastNtpSync     = 0;
 unsigned long lastMqttAttempt = 0;
 
 // Display
-bool          colonOn         = true;
-unsigned long lastColonToggle = 0;
+unsigned long lastDisplayUpdate = 0;
 
 // Alarm state machine
 enum AlarmState { IDLE, STROBE_ONLY, FULL_ALARM };
@@ -116,18 +115,12 @@ AlarmState    alarmState      = IDLE;
 bool          todayCancelled  = false;
 unsigned long alarmStartedAt  = 0;  // millis() when buzzer began
 
-volatile bool rtcAlarmFired   = false;  // written in ISR only
+bool          alarmArmed      = false;
 
 // Buzzer escalation state — reset explicitly in startBuzzer()
-unsigned long buzzerLastToggle = 0;
-bool          buzzerToneOn     = false;
-
-// ============================================================
-// ISR — IRAM_ATTR required, flag only, no I2C here
-// ============================================================
-void IRAM_ATTR onRtcAlarm() {
-  rtcAlarmFired = true;
-}
+unsigned long buzzerLastToggle    = 0;
+bool          buzzerToneOn        = false;
+bool          buzzerNegativeDrive = true;
 
 // ============================================================
 // Forward declarations (needed because setupOTA references
@@ -136,6 +129,7 @@ void IRAM_ATTR onRtcAlarm() {
 void showDashes();
 void showOtaProgress(int pct);
 void updateDisplay(int hour, int minute);
+void startStrobe();
 
 // ============================================================
 // Schedule — NVS persistence
@@ -174,19 +168,18 @@ int dayIndex(const char* name) {
 }
 
 // Find the next enabled alarm day/time from a given point.
-// Checks today first (only if alarm is still sufficiently in the future),
-// then the next 6 days — 7 offsets total, one full week.
-bool nextAlarm(int fromWday, int fromHour, int fromMin,
+// skipToday forces offset to start at 1 (used when todayCancelled=true).
+bool nextAlarm(int fromWday, int fromHour, int fromMin, bool skipToday,
                int& outDay, uint8_t& outH, uint8_t& outM) {
-  for (int offset = 0; offset < 7; offset++) {  // FIX: was 8, only 7 needed
+  for (int offset = 0; offset < 7; offset++) {
     int d = (fromWday + offset) % 7;
     if (!schedule[d].enabled) continue;
 
     if (offset == 0) {
-      // Same day: skip if strobe should already have started
+      if (skipToday) continue;
       int alarmMins   = schedule[d].hour * 60 + schedule[d].minute;
       int currentMins = fromHour * 60 + fromMin;
-      if (alarmMins - STROBE_LEAD_MIN <= currentMins) continue;
+      if (alarmMins <= currentMins) continue;
     }
 
     outDay = d;
@@ -198,38 +191,21 @@ bool nextAlarm(int fromWday, int fromHour, int fromMin,
 }
 
 // ============================================================
-// DS3231 alarm arming
+// Next alarm logging (no DS3231 alarm registers — loop check does the work)
 // ============================================================
 void armNextAlarm() {
   if (!rtcAvailable) return;
-
   DateTime now = rtc.now();
-  int     outDay;
-  uint8_t outH, outM;
-
-  if (!nextAlarm(now.dayOfTheWeek(), now.hour(), now.minute(),
+  int outDay; uint8_t outH, outM;
+  if (!nextAlarm(now.dayOfTheWeek(), now.hour(), now.minute(), todayCancelled,
                  outDay, outH, outM)) {
-    Serial.println("No alarm days enabled — RTC not armed.");
+    Serial.println("No alarm days enabled.");
     return;
   }
-
-  // Arm for strobe time = alarm time minus lead minutes
-  int strobeMin = (int)outM - STROBE_LEAD_MIN;
-  int strobeH   = (int)outH;
-  if (strobeMin < 0) {
-    strobeMin += 60;
-    strobeH    = (strobeH - 1 + 24) % 24;
-  }
-
-  rtc.clearAlarm(1);
-  rtc.setAlarm1(
-    DateTime(0, 0, 0, (uint8_t)strobeH, (uint8_t)strobeMin, 0),
-    DS3231_A1_Hour   // fires daily at HH:MM:00
-  );
-  rtc.writeSqwPinMode(DS3231_OFF); // INT/SQW acts as interrupt, not square wave
-
-  Serial.printf("Next alarm: %s %02d:%02d (strobe fires at %02d:%02d)\n",
-    DAY_KEYS[outDay], outH, outM, strobeH, strobeMin);
+  int sm = (int)outM - STROBE_LEAD_MIN, sh = (int)outH;
+  if (sm < 0) { sm += 60; sh = (sh - 1 + 24) % 24; }
+  Serial.printf("Next alarm: %s %02d:%02d (strobe at %02d:%02d)\n",
+    DAY_KEYS[outDay], outH, outM, sh, sm);
 }
 
 // ============================================================
@@ -242,63 +218,56 @@ void startStrobe() {
 }
 
 void startBuzzer() {
-  alarmState     = FULL_ALARM;
-  alarmStartedAt = millis();
-  // Reset escalation state so every alarm starts from the beginning
-  buzzerLastToggle = millis();
+  alarmState       = FULL_ALARM;
+  alarmStartedAt   = millis();
+  buzzerLastToggle = millis() - 1000; // ensure first beep fires on next loop tick
   buzzerToneOn     = false;
   Serial.println("Buzzer ON");
 }
 
 void dismiss() {
-  noTone(GPIO_BUZZER);
+  digitalWrite(GPIO_BUZZER, buzzerNegativeDrive ? HIGH : LOW);
   digitalWrite(GPIO_RELAY, LOW);
-  alarmState    = IDLE;
+  alarmState     = IDLE;
   todayCancelled = true;
-  rtcAlarmFired  = false;
-  if (rtcAvailable) rtc.clearAlarm(1);
   Serial.println("Alarm dismissed / cancelled for today.");
   armNextAlarm();
 }
 
 // Non-blocking buzzer escalation — call every loop iteration
+// Active buzzer: fixed frequency, vary on/off cadence only
 void handleBuzzerEscalation() {
   if (alarmState != FULL_ALARM) return;
 
   unsigned long elapsed = millis() - alarmStartedAt;
   unsigned long now     = millis();
 
-  // Stage parameters
-  int           freq;
   unsigned long period, onTime;
 
-  if (elapsed < 60000UL) {         // 0–1 min: slow, low
-    freq   = 880;
+  if (elapsed < 60000UL) {         // 0–1 min: slow beeps (1 per second)
     period = 1000;
     onTime = 200;
-  } else if (elapsed < 120000UL) { // 1–2 min: faster, higher
-    freq   = 1200;
-    period = 500;
+  } else if (elapsed < 120000UL) { // 1–2 min: faster beeps
+    period = 400;
     onTime = 150;
-  } else if (elapsed < 180000UL) { // 2–3 min: rapid
-    freq   = 1800;
-    period = 250;
+  } else if (elapsed < 180000UL) { // 2–3 min: rapid beeps
+    period = 200;
     onTime = 100;
-  } else {                          // 3 min+: continuous screech
+  } else {                          // 3 min+: continuous
     if (!buzzerToneOn) {
-      tone(GPIO_BUZZER, 2400);
+      digitalWrite(GPIO_BUZZER, buzzerNegativeDrive ? LOW : HIGH);
       buzzerToneOn = true;
     }
     return;
   }
 
-  // Toggle buzzer on/off based on period
+  // Toggle buzzer on/off
   if (!buzzerToneOn && now - buzzerLastToggle >= (period - onTime)) {
-    tone(GPIO_BUZZER, freq);
+    digitalWrite(GPIO_BUZZER, buzzerNegativeDrive ? LOW : HIGH);
     buzzerToneOn     = true;
     buzzerLastToggle = now;
   } else if (buzzerToneOn && now - buzzerLastToggle >= onTime) {
-    noTone(GPIO_BUZZER);
+    digitalWrite(GPIO_BUZZER, buzzerNegativeDrive ? HIGH : LOW);
     buzzerToneOn     = false;
     buzzerLastToggle = now;
   }
@@ -308,11 +277,19 @@ void handleBuzzerEscalation() {
 // Display helpers
 // ============================================================
 void updateDisplay(int hour, int minute) {
-  display.writeDigitNum(0, hour / 10,   false);
-  display.writeDigitNum(1, hour % 10,   false);
-  display.drawColon(colonOn);
-  display.writeDigitNum(3, minute / 10, false);
-  display.writeDigitNum(4, minute % 10, false);
+  int h = hour % 12;
+  if (h == 0) h = 12;
+  if (h >= 10)
+    display.writeDigitNum(0, h / 10, false);
+  else
+    display.writeDigitRaw(0, 0x00); // blank leading digit for single-digit hours
+  display.writeDigitNum(1, h % 10,        false);
+  uint8_t special = 0x02; // colon
+  if (alarmArmed)         special |= 0x04; // alarm-armed dot
+  if (hour >= 12)         special |= 0x08; // PM dot
+  display.writeDigitRaw(2, special);
+  display.writeDigitNum(3, minute / 10,   false);
+  display.writeDigitNum(4, minute % 10,   false);
   display.writeDisplay();
 }
 
@@ -376,6 +353,20 @@ void setupHttp() {
 <form method='POST' action='/dismiss'>
 <button class='dismiss' type='submit'>Dismiss / Cancel Today</button>
 </form>
+<hr>
+<div id='diag' style='font-size:0.85em;color:#555'>Loading status...</div>
+<script>
+function refresh(){
+  fetch('/status').then(r=>r.json()).then(d=>{
+    document.getElementById('diag').innerHTML=
+      'Time: <b>'+d.time+'</b> &nbsp; State: <b>'+d.state+'</b><br>'+
+      'Cancelled today: <b>'+d.cancelled+'</b> &nbsp; RTC ok: <b>'+d.rtc+'</b><br>'+
+      'Next: <b>'+d.next_day+' '+d.next_alarm+'</b> (strobe <b>'+d.next_strobe+'</b>)<br>'+
+      'WiFi: '+d.wifi_rssi+' dBm &nbsp; <small>(refreshes every 5s)</small>';
+  }).catch(()=>{ document.getElementById('diag').innerHTML='(status unavailable)'; });
+}
+refresh(); setInterval(refresh,5000);
+</script>
 </body></html>)";
     httpServer.send(200, "text/html", html);
   });
@@ -395,6 +386,7 @@ void setupHttp() {
         saveDay(d);
       }
     }
+    todayCancelled = false;
     armNextAlarm();
     httpServer.sendHeader("Location", "/");
     httpServer.send(303);
@@ -418,6 +410,7 @@ void setupHttp() {
                           ? (httpServer.arg("enabled").toInt() != 0)
                           : true;
     saveDay(d);
+    todayCancelled = false;
     armNextAlarm();
     char buf[64];
     snprintf(buf, sizeof(buf), "%s %02d:%02d enabled=%d",
@@ -435,19 +428,37 @@ void setupHttp() {
 
   // Status JSON
   httpServer.on("/status", HTTP_GET, []() {
-    char timeStr[6] = "--:--";
+    char timeStr[6]   = "--:--";
+    char nextDay[4]   = "---";
+    char nextTime[6]  = "--:--";
+    char strobeT[6]   = "--:--";
+
     if (rtcAvailable) {
-      DateTime t = rtc.now();
-      snprintf(timeStr, sizeof(timeStr), "%02d:%02d", t.hour(), t.minute());
+      DateTime now = rtc.now();
+      snprintf(timeStr, sizeof(timeStr), "%02d:%02d", now.hour(), now.minute());
+      int outDay; uint8_t outH, outM;
+      if (nextAlarm(now.dayOfTheWeek(), now.hour(), now.minute(), todayCancelled,
+                    outDay, outH, outM)) {
+        strncpy(nextDay, DAY_KEYS[outDay], sizeof(nextDay) - 1);
+        snprintf(nextTime, sizeof(nextTime), "%02d:%02d", outH, outM);
+        int sm = (int)outM - STROBE_LEAD_MIN;
+        int sh = (int)outH;
+        if (sm < 0) { sm += 60; sh = (sh - 1 + 24) % 24; }
+        snprintf(strobeT, sizeof(strobeT), "%02d:%02d", sh, sm);
+      }
     }
-    char buf[256];
+
+    char buf[384];
     snprintf(buf, sizeof(buf),
-      "{\"time\":\"%s\",\"state\":\"%s\",\"cancelled\":%s,\"wifi_rssi\":%d}",
+      "{\"time\":\"%s\",\"state\":\"%s\",\"cancelled\":%s,"
+      "\"rtc\":%s,\"wifi_rssi\":%d,"
+      "\"next_day\":\"%s\",\"next_alarm\":\"%s\",\"next_strobe\":\"%s\"}",
       timeStr,
-      alarmState == IDLE        ? "idle"   :
-      alarmState == STROBE_ONLY ? "strobe" : "alarm",
+      alarmState == IDLE ? "idle" : alarmState == STROBE_ONLY ? "strobe" : "alarm",
       todayCancelled ? "true" : "false",
-      WiFi.RSSI());
+      rtcAvailable   ? "true" : "false",
+      WiFi.RSSI(),
+      nextDay, nextTime, strobeT);
     httpServer.send(200, "application/json", buf);
   });
 
@@ -484,11 +495,15 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       return;
     }
     saveDay(d);
+    todayCancelled = false;
     armNextAlarm();
   }
 }
 
 void mqttConnect() {
+  if(!MQTT_ENABLED) {
+    return;
+  }
   if (WiFi.status() != WL_CONNECTED) return;
   if (mqtt.connected()) return;
 
@@ -548,8 +563,11 @@ void syncNtp() {
   Serial.println();
   if (retries < 10) {
     if (rtcAvailable) {
-      rtc.adjust(DateTime(time(nullptr)));
-      Serial.printf("RTC updated: %02d:%02d:%02d\n",
+      // Store local time so alarm hour comparisons stay consistent
+      rtc.adjust(DateTime(
+        timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+        timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec));
+      Serial.printf("RTC updated (local): %02d:%02d:%02d\n",
         timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     }
     ntpSynced   = true;
@@ -600,9 +618,10 @@ void setup() {
   delay(200);
   Serial.println("\n=== Adversarial Alarm Clock ===");
 
-  pinMode(GPIO_RTC_INT, INPUT_PULLUP);
   pinMode(GPIO_RELAY,   OUTPUT);
-  digitalWrite(GPIO_RELAY, LOW);
+  pinMode(GPIO_BUZZER,  OUTPUT);
+  digitalWrite(GPIO_RELAY,  LOW);
+  digitalWrite(GPIO_BUZZER, buzzerNegativeDrive ? HIGH : LOW);
 
   Wire.begin();
   display.begin(0x70);
@@ -620,15 +639,12 @@ void setup() {
 
   loadSchedule();
 
-  // Attach interrupt before arming — avoids a race if alarm time is imminent
-  attachInterrupt(digitalPinToInterrupt(GPIO_RTC_INT), onRtcAlarm, FALLING);
-
   connectWiFi();
   if (WiFi.status() == WL_CONNECTED) {
     setupOTA();
     syncNtp();
     setupHttp();
-    setupMqtt();
+    if (MQTT_ENABLED) setupMqtt();
   }
 
   armNextAlarm();
@@ -642,61 +658,45 @@ void loop() {
   ArduinoOTA.handle();
   httpServer.handleClient();
 
-  if (WiFi.status() == WL_CONNECTED) {
+  if (MQTT_ENABLED && WiFi.status() == WL_CONNECTED) {
     if (!mqtt.connected()) mqttConnect();
     mqtt.loop();
   }
 
   unsigned long now = millis();
 
-  // --- DS3231 hardware interrupt ---
-  if (rtcAlarmFired) {
-    rtcAlarmFired = false;
-    if (rtcAvailable) rtc.clearAlarm(1); // release INT pin immediately
-
-    if (!todayCancelled) {
-      if (alarmState == IDLE) {
-        // First interrupt: start strobe, re-arm DS3231 for buzzer time
-        startStrobe();
-        if (rtcAvailable) {
-          DateTime t = rtc.now();
-          int d = t.dayOfTheWeek();
-          if (schedule[d].enabled) {
-            rtc.clearAlarm(1);
-            rtc.setAlarm1(
-              DateTime(0, 0, 0, schedule[d].hour, schedule[d].minute, 0),
-              DS3231_A1_Hour
-            );
-            rtc.writeSqwPinMode(DS3231_OFF);
-            Serial.printf("DS3231 re-armed for buzzer at %02d:%02d\n",
-              schedule[d].hour, schedule[d].minute);
-          }
-        }
-      } else if (alarmState == STROBE_ONLY) {
-        // Second interrupt: start buzzer
-        startBuzzer();
-      }
-    } else {
-      // Pre-empted — both interrupts skipped, arm for next day
-      Serial.println("Alarm skipped (cancelled for today).");
-      todayCancelled = false;
-      armNextAlarm();
-    }
-  }
-
   // --- Buzzer tone escalation (non-blocking) ---
   handleBuzzerEscalation();
 
-  // --- Display update at 1Hz (colon toggles every 500ms) ---
-  if (now - lastColonToggle >= 500) {
-    colonOn         = !colonOn;
-    lastColonToggle = now;
+  // --- Display update at 1Hz ---
+  if (now - lastDisplayUpdate >= 1000) {
+    lastDisplayUpdate = now;
     if (rtcAvailable) {
-      DateTime t = rtc.now();
-      updateDisplay(t.hour(), t.minute());
+      DateTime rtcNow = rtc.now();
+      alarmArmed = schedule[(rtcNow.dayOfTheWeek() + 1) % 7].enabled;
+      updateDisplay(rtcNow.hour(), rtcNow.minute());
+
+      // Software fallback: fire alarm if DS3231 interrupt was missed
+      if (!todayCancelled) {
+        int today      = rtcNow.dayOfTheWeek();
+        int curMins    = rtcNow.hour() * 60 + rtcNow.minute();
+        int alarmMins  = schedule[today].enabled
+                         ? schedule[today].hour * 60 + schedule[today].minute : -1;
+        if (alarmMins >= 0) {
+          int strobeMins = alarmMins - STROBE_LEAD_MIN;
+          if (alarmState == IDLE && curMins >= strobeMins && curMins < alarmMins) {
+            startStrobe();
+          } else if (alarmState == STROBE_ONLY && curMins >= alarmMins) {
+            startBuzzer();
+          }
+        }
+      }
     } else if (ntpSynced) {
       struct tm ti;
-      if (getLocalTime(&ti)) updateDisplay(ti.tm_hour, ti.tm_min);
+      if (getLocalTime(&ti)) {
+        alarmArmed = schedule[(ti.tm_wday + 1) % 7].enabled;
+        updateDisplay(ti.tm_hour, ti.tm_min);
+      }
     } else {
       showDashes();
     }
