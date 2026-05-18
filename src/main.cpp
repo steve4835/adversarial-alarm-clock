@@ -179,7 +179,7 @@ bool nextAlarm(int fromWday, int fromHour, int fromMin, bool skipToday,
       if (skipToday) continue;
       int alarmMins   = schedule[d].hour * 60 + schedule[d].minute;
       int currentMins = fromHour * 60 + fromMin;
-      if (alarmMins <= currentMins) continue;
+      if (alarmMins < currentMins) continue;
     }
 
     outDay = d;
@@ -362,10 +362,10 @@ function refresh(){
       'Time: <b>'+d.time+'</b> &nbsp; State: <b>'+d.state+'</b><br>'+
       'Cancelled today: <b>'+d.cancelled+'</b> &nbsp; RTC ok: <b>'+d.rtc+'</b><br>'+
       'Next: <b>'+d.next_day+' '+d.next_alarm+'</b> (strobe <b>'+d.next_strobe+'</b>)<br>'+
-      'WiFi: '+d.wifi_rssi+' dBm &nbsp; <small>(refreshes every 5s)</small>';
+      'WiFi: '+d.wifi_rssi+' dBm &nbsp; <small>(refreshes every 1s)</small>';
   }).catch(()=>{ document.getElementById('diag').innerHTML='(status unavailable)'; });
 }
-refresh(); setInterval(refresh,5000);
+refresh(); setInterval(refresh,1000);
 </script>
 </body></html>)";
     httpServer.send(200, "text/html", html);
@@ -410,7 +410,7 @@ refresh(); setInterval(refresh,5000);
                           ? (httpServer.arg("enabled").toInt() != 0)
                           : true;
     saveDay(d);
-    todayCancelled = false;
+    if (!rtcAvailable || d != (int)rtc.now().dayOfTheWeek()) todayCancelled = false;
     armNextAlarm();
     char buf[64];
     snprintf(buf, sizeof(buf), "%s %02d:%02d enabled=%d",
@@ -428,14 +428,14 @@ refresh(); setInterval(refresh,5000);
 
   // Status JSON
   httpServer.on("/status", HTTP_GET, []() {
-    char timeStr[6]   = "--:--";
+    char timeStr[9]   = "--:--:--";
     char nextDay[4]   = "---";
     char nextTime[6]  = "--:--";
     char strobeT[6]   = "--:--";
 
     if (rtcAvailable) {
       DateTime now = rtc.now();
-      snprintf(timeStr, sizeof(timeStr), "%02d:%02d", now.hour(), now.minute());
+      snprintf(timeStr, sizeof(timeStr), "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
       int outDay; uint8_t outH, outM;
       if (nextAlarm(now.dayOfTheWeek(), now.hour(), now.minute(), todayCancelled,
                     outDay, outH, outM)) {
@@ -495,7 +495,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       return;
     }
     saveDay(d);
-    todayCancelled = false;
+    if (!rtcAvailable || d != (int)rtc.now().dayOfTheWeek()) todayCancelled = false;
     armNextAlarm();
   }
 }
@@ -684,6 +684,7 @@ void loop() {
                          ? schedule[today].hour * 60 + schedule[today].minute : -1;
         if (alarmMins >= 0) {
           int strobeMins = alarmMins - STROBE_LEAD_MIN;
+          if (strobeMins < 0) strobeMins = 0;
           if (alarmState == IDLE && curMins >= strobeMins && curMins < alarmMins) {
             startStrobe();
           } else if (alarmState == STROBE_ONLY && curMins >= alarmMins) {
