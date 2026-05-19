@@ -4,16 +4,15 @@
  * Hardware:
  *   ESP32 DevKit
  *   Adafruit 1.2" HT16K33 4-digit 7-segment display (I2C 0x70)
- *   DS3231 RTC (I2C 0x68)
- *   Piezo buzzer         → GPIO_BUZZER (drives active buzzer via digitalWrite)
- *   Opto-isolated relay  → GPIO_RELAY  (strobe on/off)
- *   DS3231 INT/SQW       → GPIO_RTC_INT (hardware alarm interrupt)
+ *   DS3231 RTC (I2C 0x68, stores local time)
+ *   Active buzzer        → GPIO_BUZZER (digitalWrite, LOW = on)
+ *   Opto-isolated relay  → GPIO_RELAY  (strobe, HIGH = on)
  *   Buck converter: 12V → 5V → ESP32 VIN
  *
- * Alarm sequence:
- *   T-5min  strobe relay ON   (first DS3231 interrupt)
- *   T+0min  buzzer starts     (second DS3231 interrupt)
- *   Dismiss buzzer + strobe off, re-arm DS3231 for next scheduled day
+ * Alarm sequence (software polling at 1 Hz):
+ *   T−1min  strobe relay ON
+ *   T+0min  buzzer starts (slow beeps → continuous over 3 min)
+ *   Dismiss buzzer + strobe off, today marked cancelled
  *
  * Dismiss / pre-empt (same endpoint, correct behaviour either way):
  *   HTTP POST /dismiss
@@ -28,9 +27,7 @@
  *   MQTT      alarm/set/sat   payload "off"
  *
  * Web UI:  http://<clock-ip>/
- * Status:  http://<clock-ip>/status
- *
- * MQTT broker: Mosquitto on your Linux box, port 1883
+ * Status:  http://<clock-ip>/status  (JSON, live on web UI)
  * ============================================================
  */
 
@@ -75,7 +72,7 @@ const uint8_t DISPLAY_BRIGHTNESS = 8; // 0–15
 // Pins
 // ============================================================
 #define GPIO_RELAY     5   // opto-isolated relay → strobe (HIGH = on)
-#define GPIO_BUZZER   18   // piezo buzzer via digitalWrite()
+#define GPIO_BUZZER   18   // active buzzer
 // I2C: SDA=21, SCL=22 (Wire library defaults)
 
 // ============================================================
@@ -118,9 +115,9 @@ unsigned long alarmStartedAt  = 0;  // millis() when buzzer began
 bool          alarmArmed      = false;
 
 // Buzzer escalation state — reset explicitly in startBuzzer()
-unsigned long buzzerLastToggle    = 0;
-bool          buzzerToneOn        = false;
-bool          buzzerNegativeDrive = true;
+unsigned long        buzzerLastToggle = 0;
+bool                 buzzerToneOn     = false;
+constexpr bool BUZZER_ACTIVE_LOW      = true; // LOW signal = buzzer on
 
 // ============================================================
 // Forward declarations (needed because setupOTA references
@@ -191,9 +188,9 @@ bool nextAlarm(int fromWday, int fromHour, int fromMin, bool skipToday,
 }
 
 // ============================================================
-// Next alarm logging (no DS3231 alarm registers — loop check does the work)
+// Alarm logging
 // ============================================================
-void armNextAlarm() {
+void logNextAlarm() {
   if (!rtcAvailable) return;
   DateTime now = rtc.now();
   int outDay; uint8_t outH, outM;
@@ -226,12 +223,12 @@ void startBuzzer() {
 }
 
 void dismiss() {
-  digitalWrite(GPIO_BUZZER, buzzerNegativeDrive ? HIGH : LOW);
+  digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
   digitalWrite(GPIO_RELAY, LOW);
   alarmState     = IDLE;
   todayCancelled = true;
   Serial.println("Alarm dismissed / cancelled for today.");
-  armNextAlarm();
+  logNextAlarm();
 }
 
 // Non-blocking buzzer escalation — call every loop iteration
@@ -255,7 +252,7 @@ void handleBuzzerEscalation() {
     onTime = 100;
   } else {                          // 3 min+: continuous
     if (!buzzerToneOn) {
-      digitalWrite(GPIO_BUZZER, buzzerNegativeDrive ? LOW : HIGH);
+      digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
       buzzerToneOn = true;
     }
     return;
@@ -263,11 +260,11 @@ void handleBuzzerEscalation() {
 
   // Toggle buzzer on/off
   if (!buzzerToneOn && now - buzzerLastToggle >= (period - onTime)) {
-    digitalWrite(GPIO_BUZZER, buzzerNegativeDrive ? LOW : HIGH);
+    digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
     buzzerToneOn     = true;
     buzzerLastToggle = now;
   } else if (buzzerToneOn && now - buzzerLastToggle >= onTime) {
-    digitalWrite(GPIO_BUZZER, buzzerNegativeDrive ? HIGH : LOW);
+    digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
     buzzerToneOn     = false;
     buzzerLastToggle = now;
   }
@@ -300,8 +297,7 @@ void showDashes() {
 }
 
 void showOtaProgress(int pct) {
-  // FIX: clamp to 0–99 to avoid display glitch at 100%
-  pct = pct > 99 ? 99 : (pct < 0 ? 0 : pct);
+  pct = pct > 99 ? 99 : (pct < 0 ? 0 : pct); // display only has 2 digits
   display.writeDigitRaw(0, 0x00);
   display.writeDigitRaw(1, 0x00);
   display.drawColon(false);
@@ -387,7 +383,7 @@ refresh(); setInterval(refresh,1000);
       }
     }
     todayCancelled = false;
-    armNextAlarm();
+    logNextAlarm();
     httpServer.sendHeader("Location", "/");
     httpServer.send(303);
   });
@@ -411,7 +407,7 @@ refresh(); setInterval(refresh,1000);
                           : true;
     saveDay(d);
     if (!rtcAvailable || d != (int)rtc.now().dayOfTheWeek()) todayCancelled = false;
-    armNextAlarm();
+    logNextAlarm();
     char buf[64];
     snprintf(buf, sizeof(buf), "%s %02d:%02d enabled=%d",
       DAY_KEYS[d], schedule[d].hour, schedule[d].minute, schedule[d].enabled);
@@ -496,14 +492,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
     saveDay(d);
     if (!rtcAvailable || d != (int)rtc.now().dayOfTheWeek()) todayCancelled = false;
-    armNextAlarm();
+    logNextAlarm();
   }
 }
 
 void mqttConnect() {
-  if(!MQTT_ENABLED) {
-    return;
-  }
+  if (!MQTT_ENABLED) return;
   if (WiFi.status() != WL_CONNECTED) return;
   if (mqtt.connected()) return;
 
@@ -589,7 +583,6 @@ void setupOTA() {
     showDashes();
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    // FIX: guard against division by zero if total < 100
     int pct = (total > 0) ? (int)((float)progress / total * 100) : 0;
     Serial.printf("OTA: %d%%\r", pct);
     showOtaProgress(pct);
@@ -621,7 +614,7 @@ void setup() {
   pinMode(GPIO_RELAY,   OUTPUT);
   pinMode(GPIO_BUZZER,  OUTPUT);
   digitalWrite(GPIO_RELAY,  LOW);
-  digitalWrite(GPIO_BUZZER, buzzerNegativeDrive ? HIGH : LOW);
+  digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
 
   Wire.begin();
   display.begin(0x70);
@@ -634,7 +627,7 @@ void setup() {
     if (rtc.lostPower())
       Serial.println("WARNING: RTC lost power — time wrong until NTP sync");
   } else {
-    Serial.println("DS3231 not found — NTP only, hardware alarm unavailable");
+    Serial.println("DS3231 not found — NTP only, no RTC fallback");
   }
 
   loadSchedule();
@@ -647,7 +640,7 @@ void setup() {
     if (MQTT_ENABLED) setupMqtt();
   }
 
-  armNextAlarm();
+  logNextAlarm();
   Serial.println("Ready.");
 }
 
@@ -676,7 +669,7 @@ void loop() {
       alarmArmed = schedule[(rtcNow.dayOfTheWeek() + 1) % 7].enabled;
       updateDisplay(rtcNow.hour(), rtcNow.minute());
 
-      // Software fallback: fire alarm if DS3231 interrupt was missed
+      // 1 Hz alarm check — fire strobe/buzzer when schedule matches
       if (!todayCancelled) {
         int today      = rtcNow.dayOfTheWeek();
         int curMins    = rtcNow.hour() * 60 + rtcNow.minute();
