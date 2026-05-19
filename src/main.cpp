@@ -61,7 +61,7 @@ const char* MQTT_CLIENT_ID = CONF_MQTT_CLIENT_ID;
 const bool MQTT_ENABLED    = false;
 
 // Timing
-const unsigned long NTP_SYNC_INTERVAL = 6UL * 60 * 60 * 1000; // 6 hours
+const unsigned int NTP_SYNC_HOUR = 4; // 4am
 const unsigned long MQTT_RECONNECT_MS = 5000;
 const int           STROBE_LEAD_MIN   = 1;  // strobe on N minutes before buzzer
 
@@ -117,7 +117,7 @@ bool          alarmArmed      = false;
 // Buzzer escalation state — reset explicitly in startBuzzer()
 unsigned long        buzzerLastToggle = 0;
 bool                 buzzerToneOn     = false;
-constexpr bool BUZZER_ACTIVE_LOW      = true; // LOW signal = buzzer on
+constexpr bool BUZZER_ACTIVE_LOW      = false; // LOW signal = buzzer on
 
 // ============================================================
 // Forward declarations (needed because setupOTA references
@@ -231,6 +231,22 @@ void dismiss() {
   logNextAlarm();
 }
 
+struct BuzzerPhase {
+  unsigned long minElapsed; // ms
+  unsigned long maxElapsed; // ms; 0xFFFFFFFFUL = open-ended
+  unsigned long period;     // ms; 0 = continuous on
+  unsigned long onTime;     // ms
+};
+
+// Each phase is active while alarmStartedAt elapsed is in [minElapsed, maxElapsed).
+// period=0 means the buzzer stays on continuously for the rest of the alarm.
+static const BuzzerPhase BUZZER_PHASES[] = {
+  {      0,  60000, 1000, 100 }, // 0–1 min:  slow beeps
+  {  60000, 120000,  400, 150 }, // 1–2 min:  faster beeps
+  { 120000, 180000,  200, 100 }, // 2–3 min:  rapid beeps
+  { 180000, 0xFFFFFFFFUL, 0, 0 }, // 3 min+: continuous
+};
+
 // Non-blocking buzzer escalation — call every loop iteration
 // Active buzzer: fixed frequency, vary on/off cadence only
 void handleBuzzerEscalation() {
@@ -239,18 +255,13 @@ void handleBuzzerEscalation() {
   unsigned long elapsed = millis() - alarmStartedAt;
   unsigned long now     = millis();
 
-  unsigned long period, onTime;
+  const BuzzerPhase* phase = nullptr;
+  for (const auto& p : BUZZER_PHASES) {
+    if (elapsed >= p.minElapsed && elapsed < p.maxElapsed) { phase = &p; break; }
+  }
+  if (!phase) return;
 
-  if (elapsed < 60000UL) {         // 0–1 min: slow beeps (1 per second)
-    period = 1000;
-    onTime = 200;
-  } else if (elapsed < 120000UL) { // 1–2 min: faster beeps
-    period = 400;
-    onTime = 150;
-  } else if (elapsed < 180000UL) { // 2–3 min: rapid beeps
-    period = 200;
-    onTime = 100;
-  } else {                          // 3 min+: continuous
+  if (phase->period == 0) {
     if (!buzzerToneOn) {
       digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
       buzzerToneOn = true;
@@ -258,12 +269,11 @@ void handleBuzzerEscalation() {
     return;
   }
 
-  // Toggle buzzer on/off
-  if (!buzzerToneOn && now - buzzerLastToggle >= (period - onTime)) {
+  if (!buzzerToneOn && now - buzzerLastToggle >= (phase->period - phase->onTime)) {
     digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
     buzzerToneOn     = true;
     buzzerLastToggle = now;
-  } else if (buzzerToneOn && now - buzzerLastToggle >= onTime) {
+  } else if (buzzerToneOn && now - buzzerLastToggle >= phase->onTime) {
     digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
     buzzerToneOn     = false;
     buzzerLastToggle = now;
@@ -358,7 +368,7 @@ function refresh(){
       'Time: <b>'+d.time+'</b> &nbsp; State: <b>'+d.state+'</b><br>'+
       'Cancelled today: <b>'+d.cancelled+'</b> &nbsp; RTC ok: <b>'+d.rtc+'</b><br>'+
       'Next: <b>'+d.next_day+' '+d.next_alarm+'</b> (strobe <b>'+d.next_strobe+'</b>)<br>'+
-      'WiFi: '+d.wifi_rssi+' dBm &nbsp; <small>(refreshes every 1s)</small>';
+      'NTP sync: <b>'+d.ntp_sync+'</b> &nbsp; WiFi: '+d.wifi_rssi+' dBm &nbsp; <small>(refreshes every 1s)</small>';
   }).catch(()=>{ document.getElementById('diag').innerHTML='(status unavailable)'; });
 }
 refresh(); setInterval(refresh,1000);
@@ -444,17 +454,33 @@ refresh(); setInterval(refresh,1000);
       }
     }
 
-    char buf[384];
+    char ntpSyncStr[32] = "never";
+    if (lastNtpSync > 0) {
+      unsigned long elapsed = millis() - lastNtpSync;
+      unsigned long secs = elapsed / 1000;
+      unsigned long mins = secs / 60;
+      unsigned long hrs  = mins / 60;
+      if (hrs > 0)
+        snprintf(ntpSyncStr, sizeof(ntpSyncStr), "%luh %02lum ago", hrs, mins % 60);
+      else if (mins > 0)
+        snprintf(ntpSyncStr, sizeof(ntpSyncStr), "%lum ago", mins);
+      else
+        snprintf(ntpSyncStr, sizeof(ntpSyncStr), "%lus ago", secs);
+    }
+
+    char buf[448];
     snprintf(buf, sizeof(buf),
       "{\"time\":\"%s\",\"state\":\"%s\",\"cancelled\":%s,"
       "\"rtc\":%s,\"wifi_rssi\":%d,"
-      "\"next_day\":\"%s\",\"next_alarm\":\"%s\",\"next_strobe\":\"%s\"}",
+      "\"next_day\":\"%s\",\"next_alarm\":\"%s\",\"next_strobe\":\"%s\","
+      "\"ntp_sync\":\"%s\"}",
       timeStr,
       alarmState == IDLE ? "idle" : alarmState == STROBE_ONLY ? "strobe" : "alarm",
       todayCancelled ? "true" : "false",
       rtcAvailable   ? "true" : "false",
       WiFi.RSSI(),
-      nextDay, nextTime, strobeT);
+      nextDay, nextTime, strobeT,
+      ntpSyncStr);
     httpServer.send(200, "application/json", buf);
   });
 
@@ -666,7 +692,16 @@ void loop() {
     lastDisplayUpdate = now;
     if (rtcAvailable) {
       DateTime rtcNow = rtc.now();
-      alarmArmed = schedule[(rtcNow.dayOfTheWeek() + 1) % 7].enabled;
+      int todayIdx    = rtcNow.dayOfTheWeek();
+      int tomorrowIdx = (todayIdx + 1) % 7;
+      int curMins     = rtcNow.hour() * 60 + rtcNow.minute();
+      int todayMins   = schedule[todayIdx].enabled
+                        ? schedule[todayIdx].hour * 60 + schedule[todayIdx].minute : -1;
+
+      bool alarmLaterToday = todayMins > curMins && !todayCancelled;
+      bool alarmTomorrow   = schedule[tomorrowIdx].enabled;
+
+      alarmArmed = alarmLaterToday || alarmTomorrow;
       updateDisplay(rtcNow.hour(), rtcNow.minute());
 
       // 1 Hz alarm check — fire strobe/buzzer when schedule matches
@@ -708,8 +743,11 @@ void loop() {
   }
 
   // --- Periodic NTP re-sync ---
-  if (WiFi.status() == WL_CONNECTED && now - lastNtpSync > NTP_SYNC_INTERVAL)
-    syncNtp();
+  if (WiFi.status() == WL_CONNECTED && rtcAvailable) {
+    DateTime rtcNow = rtc.now();
+    if(rtcNow.hour() == NTP_SYNC_HOUR && rtcNow.minute() == 0 && rtcNow.second() < 2)
+      syncNtp();
+  }
 
   // --- WiFi watchdog ---
   if (WiFi.status() != WL_CONNECTED) {
