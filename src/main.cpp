@@ -10,8 +10,8 @@
  *   Buck converter: 12V → 5V → ESP32 VIN
  *
  * Alarm sequence (software polling at 1 Hz):
- *   T−1min  strobe relay ON
  *   T+0min  buzzer starts (slow beeps → continuous over 3 min)
+ *            strobe relay joins after first escalation phase
  *   Dismiss buzzer + strobe off, today marked cancelled
  *
  * Dismiss / pre-empt (same endpoint, correct behaviour either way):
@@ -63,7 +63,6 @@ const bool MQTT_ENABLED    = false;
 // Timing
 const unsigned int NTP_SYNC_HOUR = 4; // 4am
 const unsigned long MQTT_RECONNECT_MS = 5000;
-const int           STROBE_LEAD_MIN   = 1;  // strobe on N minutes before buzzer
 
 // Display
 const uint8_t DISPLAY_BRIGHTNESS = 8; // 0–15
@@ -107,7 +106,7 @@ unsigned long lastMqttAttempt = 0;
 unsigned long lastDisplayUpdate = 0;
 
 // Alarm state machine
-enum AlarmState { IDLE, STROBE_ONLY, FULL_ALARM };
+enum AlarmState { IDLE, FULL_ALARM };
 AlarmState    alarmState      = IDLE;
 bool          todayCancelled  = false;
 unsigned long alarmStartedAt  = 0;  // millis() when buzzer began
@@ -126,7 +125,6 @@ constexpr bool BUZZER_ACTIVE_LOW      = false; // LOW signal = buzzer on
 void showDashes();
 void showOtaProgress(int pct);
 void updateDisplay(int hour, int minute);
-void startStrobe();
 
 // ============================================================
 // Schedule — NVS persistence
@@ -199,22 +197,14 @@ void logNextAlarm() {
     Serial.println("No alarm days enabled.");
     return;
   }
-  int sm = (int)outM - STROBE_LEAD_MIN, sh = (int)outH;
-  if (sm < 0) { sm += 60; sh = (sh - 1 + 24) % 24; }
-  Serial.printf("Next alarm: %s %02d:%02d (strobe at %02d:%02d)\n",
-    DAY_KEYS[outDay], outH, outM, sh, sm);
+  Serial.printf("Next alarm: %s %02d:%02d\n", DAY_KEYS[outDay], outH, outM);
 }
 
 // ============================================================
 // Alarm state machine
 // ============================================================
-void startStrobe() {
-  alarmState = STROBE_ONLY;
-  digitalWrite(GPIO_RELAY, HIGH);
-  Serial.println("Strobe ON");
-}
-
 void startBuzzer() {
+  digitalWrite(GPIO_RELAY, LOW); // relay is escalation-controlled; start clean
   alarmState       = FULL_ALARM;
   alarmStartedAt   = millis();
   buzzerLastToggle = millis() - 1000; // ensure first beep fires on next loop tick
@@ -231,20 +221,24 @@ void dismiss() {
   logNextAlarm();
 }
 
-struct BuzzerPhase {
+struct AlarmPhase {
   unsigned long minElapsed; // ms
   unsigned long maxElapsed; // ms; 0xFFFFFFFFUL = open-ended
   unsigned long period;     // ms; 0 = continuous on
   unsigned long onTime;     // ms
+  bool          buzzerOn;    // 
+  bool          strobeOn;   // relay state for this phase
 };
 
-// Each phase is active while alarmStartedAt elapsed is in [minElapsed, maxElapsed).
-// period=0 means the buzzer stays on continuously for the rest of the alarm.
-static const BuzzerPhase BUZZER_PHASES[] = {
-  {      0,  60000, 1000, 100 }, // 0–1 min:  slow beeps
-  {  60000, 120000,  400, 150 }, // 1–2 min:  faster beeps
-  { 120000, 180000,  200, 100 }, // 2–3 min:  rapid beeps
-  { 180000, 0xFFFFFFFFUL, 0, 0 }, // 3 min+: continuous
+// Each phase is active while elapsed is in [minElapsed, maxElapsed).
+// period=0 keeps the buzzer latched on for the rest of the alarm.
+static const AlarmPhase ALARM_PHASES[] = {
+  {      0,  30000, 10000, 250, true, false }, // 0–1 min:  slow beeps, no strobe
+  {  30000,  60000, 5000, 250, true, false }, // 0–1 min:  slow beeps, no strobe
+  {  60000, 120000,  1000, 200, true, false  }, // 1–2 min:  faster beeps + strobe
+  { 120000, 150000,  500, 150, true, true  }, // 2–3 min:  rapid beeps + strobe
+  { 150000, 180000,  200, 75, true, true  }, // 2–3 min:  rapid beeps + strobe
+  { 180000, 0xFFFFFFFFUL, 0, 0, true, true }, // 3 min+:   continuous + strobe
 };
 
 // Non-blocking buzzer escalation — call every loop iteration
@@ -255,16 +249,21 @@ void handleBuzzerEscalation() {
   unsigned long elapsed = millis() - alarmStartedAt;
   unsigned long now     = millis();
 
-  const BuzzerPhase* phase = nullptr;
-  for (const auto& p : BUZZER_PHASES) {
+  const AlarmPhase* phase = nullptr;
+  for (const auto& p : ALARM_PHASES) {
     if (elapsed >= p.minElapsed && elapsed < p.maxElapsed) { phase = &p; break; }
   }
   if (!phase) return;
 
+  digitalWrite(GPIO_RELAY, phase->strobeOn ? HIGH : LOW);
+
   if (phase->period == 0) {
-    if (!buzzerToneOn) {
+    if (phase->buzzerOn && !buzzerToneOn) {
       digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
       buzzerToneOn = true;
+    } else if(!phase->buzzerOn && buzzerToneOn) {
+      digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
+      buzzerToneOn = false;
     }
     return;
   }
@@ -367,7 +366,7 @@ function refresh(){
     document.getElementById('diag').innerHTML=
       'Time: <b>'+d.time+'</b> &nbsp; State: <b>'+d.state+'</b><br>'+
       'Cancelled today: <b>'+d.cancelled+'</b> &nbsp; RTC ok: <b>'+d.rtc+'</b><br>'+
-      'Next: <b>'+d.next_day+' '+d.next_alarm+'</b> (strobe <b>'+d.next_strobe+'</b>)<br>'+
+      'Next: <b>'+d.next_day+' '+d.next_alarm+'</b><br>'+
       'NTP sync: <b>'+d.ntp_sync+'</b> &nbsp; WiFi: '+d.wifi_rssi+' dBm &nbsp; <small>(refreshes every 1s)</small>';
   }).catch(()=>{ document.getElementById('diag').innerHTML='(status unavailable)'; });
 }
@@ -437,7 +436,6 @@ refresh(); setInterval(refresh,1000);
     char timeStr[9]   = "--:--:--";
     char nextDay[4]   = "---";
     char nextTime[6]  = "--:--";
-    char strobeT[6]   = "--:--";
 
     if (rtcAvailable) {
       DateTime now = rtc.now();
@@ -447,10 +445,6 @@ refresh(); setInterval(refresh,1000);
                     outDay, outH, outM)) {
         strncpy(nextDay, DAY_KEYS[outDay], sizeof(nextDay) - 1);
         snprintf(nextTime, sizeof(nextTime), "%02d:%02d", outH, outM);
-        int sm = (int)outM - STROBE_LEAD_MIN;
-        int sh = (int)outH;
-        if (sm < 0) { sm += 60; sh = (sh - 1 + 24) % 24; }
-        snprintf(strobeT, sizeof(strobeT), "%02d:%02d", sh, sm);
       }
     }
 
@@ -468,18 +462,18 @@ refresh(); setInterval(refresh,1000);
         snprintf(ntpSyncStr, sizeof(ntpSyncStr), "%lus ago", secs);
     }
 
-    char buf[448];
+    char buf[384];
     snprintf(buf, sizeof(buf),
       "{\"time\":\"%s\",\"state\":\"%s\",\"cancelled\":%s,"
       "\"rtc\":%s,\"wifi_rssi\":%d,"
-      "\"next_day\":\"%s\",\"next_alarm\":\"%s\",\"next_strobe\":\"%s\","
+      "\"next_day\":\"%s\",\"next_alarm\":\"%s\","
       "\"ntp_sync\":\"%s\"}",
       timeStr,
-      alarmState == IDLE ? "idle" : alarmState == STROBE_ONLY ? "strobe" : "alarm",
+      alarmState == IDLE ? "idle" : "alarm",
       todayCancelled ? "true" : "false",
       rtcAvailable   ? "true" : "false",
       WiFi.RSSI(),
-      nextDay, nextTime, strobeT,
+      nextDay, nextTime,
       ntpSyncStr);
     httpServer.send(200, "application/json", buf);
   });
@@ -666,6 +660,19 @@ void setup() {
     if (MQTT_ENABLED) setupMqtt();
   }
 
+  // If we're booting after today's alarm time, don't fire immediately
+  if (rtcAvailable) {
+    DateTime now  = rtc.now();
+    int today     = now.dayOfTheWeek();
+    int curMins   = now.hour() * 60 + now.minute();
+    int alarmMins = schedule[today].enabled
+                    ? schedule[today].hour * 60 + schedule[today].minute : -1;
+    if (alarmMins >= 0 && curMins > alarmMins) {
+      todayCancelled = true;
+      Serial.println("Boot after alarm time — skipping today's alarm.");
+    }
+  }
+
   logNextAlarm();
   Serial.println("Ready.");
 }
@@ -710,14 +717,8 @@ void loop() {
         int curMins    = rtcNow.hour() * 60 + rtcNow.minute();
         int alarmMins  = schedule[today].enabled
                          ? schedule[today].hour * 60 + schedule[today].minute : -1;
-        if (alarmMins >= 0) {
-          int strobeMins = alarmMins - STROBE_LEAD_MIN;
-          if (strobeMins < 0) strobeMins = 0;
-          if (alarmState == IDLE && curMins >= strobeMins && curMins < alarmMins) {
-            startStrobe();
-          } else if (alarmState == STROBE_ONLY && curMins >= alarmMins) {
-            startBuzzer();
-          }
+        if (alarmMins >= 0 && alarmState == IDLE && curMins >= alarmMins) {
+          startBuzzer();
         }
       }
     } else if (ntpSynced) {
