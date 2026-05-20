@@ -137,15 +137,19 @@ refresh(); setInterval(refresh,1000);
     char ntpSyncStr[32] = "never";
     if (lastNtpSync > 0) {
       unsigned long elapsed = millis() - lastNtpSync;
-      unsigned long secs = elapsed / 1000;
-      unsigned long mins = secs / 60;
-      unsigned long hrs  = mins / 60;
-      if (hrs > 0)
-        snprintf(ntpSyncStr, sizeof(ntpSyncStr), "%luh %02lum ago", hrs, mins % 60);
-      else if (mins > 0)
-        snprintf(ntpSyncStr, sizeof(ntpSyncStr), "%lum ago", mins);
-      else
-        snprintf(ntpSyncStr, sizeof(ntpSyncStr), "%lus ago", secs);
+      if (elapsed > 7UL * 24 * 60 * 60 * 1000) {
+        strncpy(ntpSyncStr, "over 7 days ago", sizeof(ntpSyncStr) - 1);
+      } else {
+        unsigned long secs = elapsed / 1000;
+        unsigned long mins = secs / 60;
+        unsigned long hrs  = mins / 60;
+        if (hrs > 0)
+          snprintf(ntpSyncStr, sizeof(ntpSyncStr), "%luh %02lum ago", hrs, mins % 60);
+        else if (mins > 0)
+          snprintf(ntpSyncStr, sizeof(ntpSyncStr), "%lum ago", mins);
+        else
+          snprintf(ntpSyncStr, sizeof(ntpSyncStr), "%lus ago", secs);
+      }
     }
 
     char buf[384];

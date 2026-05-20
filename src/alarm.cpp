@@ -44,7 +44,7 @@ void resetTodayCancelledIfSafe() {
   int alarmMins = schedule[now.dayOfTheWeek()].enabled
                   ? schedule[now.dayOfTheWeek()].hour * 60 + schedule[now.dayOfTheWeek()].minute
                   : -1;
-  if (alarmMins < 0 || curMins < alarmMins) todayCancelled = false;
+  todayCancelled = (alarmMins >= 0 && curMins >= alarmMins);
 }
 
 void dismiss() {

@@ -54,7 +54,6 @@ WiFiClient  wifiClient;
 PubSubClient mqtt(wifiClient);
 
 bool          rtcAvailable    = false;
-bool          rtcLostPower    = false;
 bool          ntpSynced       = false;
 unsigned long lastNtpSync     = 0;
 unsigned long lastMqttAttempt = 0;
@@ -149,9 +148,11 @@ void loop() {
       updateDisplay(rtcNow.hour(), rtcNow.minute());
 
       // Midnight rollover: reuse rtcNow so no extra I2C read on every loop tick
-      static int lastDay = -1;
+      static int  lastDay        = -1;
+      static bool ntpSyncedToday = false;
       if (lastDay != -1 && rtcNow.day() != (uint8_t)lastDay) {
         todayCancelled = false;
+        ntpSyncedToday = false;
         Serial.println("Midnight rollover — todayCancelled reset.");
       }
       lastDay = rtcNow.day();
@@ -163,10 +164,12 @@ void loop() {
           startBuzzer();
       }
 
-      // Periodic NTP re-sync (reuse rtcNow — no extra I2C read)
+      // Periodic NTP re-sync — flag prevents missing the narrow time window under load
       if (WiFi.status() == WL_CONNECTED &&
-          rtcNow.hour() == NTP_SYNC_HOUR && rtcNow.minute() == 0 && rtcNow.second() < 2)
+          rtcNow.hour() == NTP_SYNC_HOUR && !ntpSyncedToday) {
         syncNtp();
+        ntpSyncedToday = true;
+      }
     } else if (ntpSynced) {
       struct tm ti;
       if (getLocalTime(&ti)) {
