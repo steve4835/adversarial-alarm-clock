@@ -37,6 +37,16 @@ void startBuzzer() {
   Serial.println("Buzzer ON");
 }
 
+void resetTodayCancelledIfSafe() {
+  if (!rtcAvailable) { todayCancelled = false; return; }
+  DateTime now = rtc.now();
+  int curMins   = now.hour() * 60 + now.minute();
+  int alarmMins = schedule[now.dayOfTheWeek()].enabled
+                  ? schedule[now.dayOfTheWeek()].hour * 60 + schedule[now.dayOfTheWeek()].minute
+                  : -1;
+  if (alarmMins < 0 || curMins < alarmMins) todayCancelled = false;
+}
+
 void dismiss() {
   digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
   digitalWrite(GPIO_RELAY, LOW);

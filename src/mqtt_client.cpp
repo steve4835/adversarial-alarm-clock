@@ -31,7 +31,7 @@ static void mqttCallback(char* topic, byte* payload, unsigned int length) {
       return;
     }
     saveDay(d);
-    if (!rtcAvailable || d != (int)rtc.now().dayOfTheWeek()) todayCancelled = false;
+    resetTodayCancelledIfSafe();
     logNextAlarm();
   }
 }

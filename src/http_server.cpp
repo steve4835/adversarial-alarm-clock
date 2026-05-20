@@ -78,7 +78,7 @@ refresh(); setInterval(refresh,1000);
         saveDay(d);
       }
     }
-    todayCancelled = false;
+    resetTodayCancelledIfSafe();
     logNextAlarm();
     httpServer.sendHeader("Location", "/");
     httpServer.send(303);
@@ -101,7 +101,7 @@ refresh(); setInterval(refresh,1000);
                           ? (httpServer.arg("enabled").toInt() != 0)
                           : true;
     saveDay(d);
-    if (!rtcAvailable || d != (int)rtc.now().dayOfTheWeek()) todayCancelled = false;
+    resetTodayCancelledIfSafe();
     logNextAlarm();
     char buf[64];
     snprintf(buf, sizeof(buf), "%s %02d:%02d enabled=%d",
@@ -109,13 +109,12 @@ refresh(); setInterval(refresh,1000);
     httpServer.send(200, "text/plain", buf);
   });
 
-  // Dismiss / pre-empt — GET for browser testing, POST for production
+  // Dismiss / pre-empt
   auto handleDismiss = []() {
     httpServer.send(200, "text/plain", "ok");
     dismiss();
   };
   httpServer.on("/dismiss", HTTP_POST, handleDismiss);
-  httpServer.on("/dismiss", HTTP_GET,  handleDismiss);
 
   // Status JSON
   httpServer.on("/status", HTTP_GET, []() {
