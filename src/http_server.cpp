@@ -158,10 +158,10 @@ refresh(); setInterval(refresh,1000);
       "\"rtc\":%s,\"wifi_rssi\":%d,"
       "\"next_day\":\"%s\",\"next_alarm\":\"%s\","
       "\"ntp_sync\":\"%s\","
-      "\"hw_info\":",
+      "\"hw_info\":"
       "{\"cpu_mhz\":%u,\"chip_model\":\"%s\",\"chip_rev\":%d,\"cores\":%d,"
       "\"flash_size\":%u,\"flash_speed\":%u,"
-      "\"heap_free\":%u,\"heap_min_free\":%u,\"heap_max_alloc\":%u}",
+      "\"heap_free\":%u,\"heap_min_free\":%u,\"heap_max_alloc\":%u}"
       "}",
       timeStr,
       alarmState == IDLE ? "idle" : "alarm",
