@@ -152,19 +152,27 @@ refresh(); setInterval(refresh,1000);
       }
     }
 
-    char buf[384];
+    char buf[600];
     snprintf(buf, sizeof(buf),
       "{\"time\":\"%s\",\"state\":\"%s\",\"cancelled\":%s,"
       "\"rtc\":%s,\"wifi_rssi\":%d,"
       "\"next_day\":\"%s\",\"next_alarm\":\"%s\","
-      "\"ntp_sync\":\"%s\"}",
+      "\"ntp_sync\":\"%s\","
+      "\"hw_info\":",
+      "{\"cpu_mhz\":%u,\"chip_model\":\"%s\",\"chip_rev\":%d,\"cores\":%d,"
+      "\"flash_size\":%u,\"flash_speed\":%u,"
+      "\"heap_free\":%u,\"heap_min_free\":%u,\"heap_max_alloc\":%u}",
+      "}",
       timeStr,
       alarmState == IDLE ? "idle" : "alarm",
       todayCancelled ? "true" : "false",
       rtcAvailable   ? "true" : "false",
       WiFi.RSSI(),
       nextDay, nextTime,
-      ntpSyncStr);
+      ntpSyncStr,
+      ESP.getCpuFreqMHz(), ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(),
+      ESP.getFlashChipSize(), ESP.getFlashChipSpeed(),
+      ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
     httpServer.send(200, "application/json", buf);
   });
 
