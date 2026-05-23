@@ -55,6 +55,7 @@ PubSubClient mqtt(wifiClient);
 
 bool          rtcAvailable    = false;
 bool          ntpSynced       = false;
+bool          rtcPowerLost    = false;
 unsigned long lastNtpSync     = 0;
 unsigned long lastMqttAttempt = 0;
 unsigned long lastDisplayUpdate = 0;
@@ -130,21 +131,32 @@ void loop() {
   if (now - lastDisplayUpdate >= 1000) {
     lastDisplayUpdate = now;
 
-    if(rtc.lostPower()) {
-      if (ntpSynced) {
-        ntpSynced = false;
-        Serial.println("WARNING: RTC lost power — time wrong until NTP sync");
-        syncNtp();
+    if (rtcAvailable && rtc.lostPower()) {
+      Serial.println("WARNING: RTC lost power — time wrong until NTP sync");
+      rtcPowerLost = true;
+      ntpSynced = syncNtp();
+      if (ntpSynced) rtcPowerLost = false;
+      // Show drifted RTC time rather than blanking; DS3231 coin cell keeps the
+      // oscillator running through VCC loss, so drift is usually small
+      DateTime rtcNow = rtc.now();
+      updateDisplay(rtcNow.hour(), rtcNow.minute());
+      if (!todayCancelled) {
+        int curMins   = rtcNow.hour() * 60 + rtcNow.minute();
+        int alarmMins = schedule[rtcNow.dayOfTheWeek()].enabled
+                        ? schedule[rtcNow.dayOfTheWeek()].hour * 60 + schedule[rtcNow.dayOfTheWeek()].minute : -1;
+        if (alarmMins >= 0 && alarmState == IDLE && curMins >= alarmMins)
+          startBuzzer();
       }
+      // TODO: flash display or surface indicator for rtcPowerLost warning
     } else if (rtcAvailable) {
       DateTime rtcNow = rtc.now();
       int todayIdx    = rtcNow.dayOfTheWeek();
       int tomorrowIdx = (todayIdx + 1) % 7;
       int curMins     = rtcNow.hour() * 60 + rtcNow.minute();
-      int todayMins   = schedule[todayIdx].enabled
+      int alarmMins   = schedule[todayIdx].enabled
                         ? schedule[todayIdx].hour * 60 + schedule[todayIdx].minute : -1;
 
-      alarmArmed = (todayMins > curMins && !todayCancelled) || schedule[tomorrowIdx].enabled;
+      alarmArmed = (alarmMins > curMins && !todayCancelled) || schedule[tomorrowIdx].enabled;
       updateDisplay(rtcNow.hour(), rtcNow.minute());
 
       // Midnight rollover: reuse rtcNow so no extra I2C read on every loop tick
@@ -158,8 +170,6 @@ void loop() {
       lastDay = rtcNow.day();
 
       if (!todayCancelled) {
-        int alarmMins = schedule[todayIdx].enabled
-                        ? schedule[todayIdx].hour * 60 + schedule[todayIdx].minute : -1;
         if (alarmMins >= 0 && alarmState == IDLE && curMins >= alarmMins)
           startBuzzer();
       }
@@ -167,14 +177,18 @@ void loop() {
       // Periodic NTP re-sync — flag prevents missing the narrow time window under load
       if (WiFi.status() == WL_CONNECTED &&
           rtcNow.hour() == NTP_SYNC_HOUR && !ntpSyncedToday) {
-        syncNtp();
-        ntpSyncedToday = true;
+          ntpSyncedToday = syncNtp();
       }
     } else if (ntpSynced) {
       struct tm ti;
       if (getLocalTime(&ti)) {
-        alarmArmed = schedule[(ti.tm_wday + 1) % 7].enabled;
+        int curMins   = ti.tm_hour * 60 + ti.tm_min;
+        int alarmMins = schedule[ti.tm_wday].enabled
+                        ? schedule[ti.tm_wday].hour * 60 + schedule[ti.tm_wday].minute : -1;
+        alarmArmed = (alarmMins > curMins && !todayCancelled) || schedule[(ti.tm_wday + 1) % 7].enabled;
         updateDisplay(ti.tm_hour, ti.tm_min);
+        if (alarmMins >= 0 && alarmState == IDLE && !todayCancelled && curMins >= alarmMins)
+          startBuzzer();
       }
     } else {
       showDashes();

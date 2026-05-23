@@ -53,6 +53,7 @@ function refresh(){
     document.getElementById('diag').innerHTML=
       'Time: <b>'+d.time+'</b> &nbsp; State: <b>'+d.state+'</b><br>'+
       'Cancelled today: <b>'+d.cancelled+'</b> &nbsp; RTC ok: <b>'+d.rtc+'</b><br>'+
+      (d.rtc_power_lost ? '<b style="color:orange">⚠ RTC lost power — time may be drifted (pending NTP sync)</b><br>' : '')+
       'Next: <b>'+d.next_day+' '+d.next_alarm+'</b><br>'+
       'NTP sync: <b>'+d.ntp_sync+'</b> &nbsp; WiFi: '+d.wifi_rssi+' dBm &nbsp; <small>(refreshes every 1s)</small>';
   }).catch(()=>{ document.getElementById('diag').innerHTML='(status unavailable)'; });
@@ -152,10 +153,10 @@ refresh(); setInterval(refresh,1000);
       }
     }
 
-    char buf[600];
+    char buf[640];
     snprintf(buf, sizeof(buf),
       "{\"time\":\"%s\",\"state\":\"%s\",\"cancelled\":%s,"
-      "\"rtc\":%s,\"wifi_rssi\":%d,"
+      "\"rtc\":%s,\"rtc_power_lost\":%s,\"wifi_rssi\":%d,"
       "\"next_day\":\"%s\",\"next_alarm\":\"%s\","
       "\"ntp_sync\":\"%s\","
       "\"hw_info\":"
@@ -167,6 +168,7 @@ refresh(); setInterval(refresh,1000);
       alarmState == IDLE ? "idle" : "alarm",
       todayCancelled ? "true" : "false",
       rtcAvailable   ? "true" : "false",
+      rtcPowerLost   ? "true" : "false",
       WiFi.RSSI(),
       nextDay, nextTime,
       ntpSyncStr,

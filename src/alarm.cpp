@@ -31,8 +31,7 @@ void startBuzzer() {
   digitalWrite(GPIO_RELAY, LOW); // relay is escalation-controlled; start clean
   digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
   alarmState       = ALARM;
-  alarmStartedAt   = millis();
-  buzzerLastToggle = millis();
+  alarmStartedAt = buzzerLastToggle = millis();
   buzzerToneOn     = true;
   Serial.println("Buzzer ON");
 }
@@ -59,8 +58,8 @@ void dismiss() {
 void handleBuzzerEscalation() {
   if (alarmState != ALARM) return;
 
-  unsigned long elapsed = millis() - alarmStartedAt;
   unsigned long now     = millis();
+  unsigned long elapsed = now - alarmStartedAt;
 
   const AlarmPhase* phase = nullptr;
   for (const auto& p : ALARM_PHASES) {

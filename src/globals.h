@@ -17,6 +17,7 @@ extern PubSubClient mqtt;
 // Connection state
 extern bool          rtcAvailable;
 extern bool          ntpSynced;
+extern bool          rtcPowerLost;
 extern unsigned long lastNtpSync;
 extern unsigned long lastMqttAttempt;
 
