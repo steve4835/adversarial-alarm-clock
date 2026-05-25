@@ -1,175 +1,97 @@
 # Adversarial Alarm Clock
 
-An alarm clock for people who are not hard to wake up — just hard to get out of bed.
-
-Built on an ESP32. No snooze button. No mercy.
-
----
-
-## Philosophy
-
-Most alarm clocks fail because dismissing them requires no effort. Roll over, tap a button, go back to sleep. This clock is designed so that the only way to silence it is to get up and go somewhere else. By the time you've done that, you're up.
-
-- **No snooze.** Ever.
-- **Strobe light** fires 5 minutes before the buzzer so you can't claim you didn't know it was coming.
-- **NFC tag** on the coffee maker — tap your phone to it, alarm stops, coffee starts. You're already there.
-- **Escalating buzzer** — slow beeps become continuous screech over 3 minutes if you somehow ignore everything else.
-
----
+An ESP32-based alarm clock designed to be difficult to dismiss. The buzzer escalates over three minutes from slow intermittent beeps to continuous tone, and dismissal requires an authenticated HTTP or MQTT request rather than a physical button.
 
 ## Hardware
 
-| Component | Part | Notes |
-|---|---|---|
-| MCU | ESP32-WROOM-32 DevKit | DOIT DevKit V1 recommended |
-| Display | Adafruit 1.2" 4-digit 7-segment w/ HT16K33 backpack | I2C, addr 0x70 |
-| RTC | DS3231 module | I2C, addr 0x68, shared bus with display |
-| Strobe | 12VDC xenon strobe beacon, 60 FPM | Switched via relay |
-| Relay | Opto-isolated relay module, 5V coil | Controls strobe power |
-| Buzzer | Active buzzer | Driven via `digitalWrite()`, GPIO 18 |
-| Power | 3S LiPo + 12V BMS + buck converter (12V→5V) | 12V rail for strobe, 5V for ESP32 |
-| Power input | Panel-mount 5.5mm barrel jack | 12VDC in |
-| Enclosure | 230×150×85mm ABS project box | |
-| NFC tag | NTAG215 sticker | On coffee maker, dismiss via iOS Shortcuts |
+| Component | Details |
+|-----------|---------|
+| MCU | ESP32 DevKit |
+| Display | Adafruit 1.2" 4-digit 7-segment (HT16K33, I2C 0x70) |
+| RTC | DS3231 (I2C 0x68, stores local time) |
+| Buzzer | Active buzzer on GPIO 18 |
+| Relay | Opto-isolated relay on GPIO 5 (strobe output) |
+| Power | 12V input → buck converter → 5V → ESP32 VIN |
 
-### Wiring
+The relay output is intended to drive a lamp or other load as a strobe. It activates at the start of the alarm and stays on until dismissal.
 
-```
-ESP32 GPIO  │ Connected to
-────────────┼─────────────────────────────────────────
-5           │ Relay module IN (HIGH = strobe on)
-18          │ Active buzzer (+)
-21 (SDA)    │ HT16K33 SDA + DS3231 SDA
-22 (SCL)    │ HT16K33 SCL + DS3231 SCL
-3.3V        │ HT16K33 VCC, DS3231 VCC
-GND         │ HT16K33 GND, DS3231 GND, buzzer (−)
+## Alarm sequence
 
-12V rail    │ Strobe (+), relay COM/NO
-5V rail     │ ESP32 VIN, relay coil VCC
-```
+The buzzer escalates through six phases, keyed on milliseconds elapsed since the alarm started:
 
-> The DS3231 INT/SQW pin is not used. Alarm timing is handled entirely in software — the main loop checks the RTC time once per second and triggers the strobe and buzzer directly.
+| Elapsed | Period | On-time | Strobe |
+|---------|--------|---------|--------|
+| 0–30 s | 10 s | 250 ms | yes |
+| 30–60 s | 5 s | 250 ms | yes |
+| 1–2 min | 1 s | 200 ms | yes |
+| 2–2.5 min | 500 ms | 150 ms | yes |
+| 2.5–3 min | 200 ms | 150 ms | yes |
+| 3 min+ | continuous | — | yes |
 
----
+Dismissal stops both the buzzer and relay and marks today's alarm cancelled. The alarm will not re-fire until the next scheduled day.
 
-## Alarm Sequence
+## Control interfaces
 
-```
-T − 1 min   Loop detects strobe window
-            → Strobe relay switches ON
+### HTTP
 
-T + 0 min   Loop detects alarm time
-            → Buzzer starts (slow beeps)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | Web UI — schedule editor with live status |
+| GET | `/status` | JSON status (time, state, next alarm, hw info) |
+| POST | `/alarm?day=mon&h=6&m=30` | Set a day's alarm time |
+| POST | `/alarm?day=sat&enabled=0` | Disable a day |
+| POST | `/dismiss` | Dismiss or pre-empt; body must contain the dismiss token |
+| POST | `/alarm/ui` | Form handler for the web UI schedule save |
 
-T + 1 min   Buzzer cadence increases (faster beeps)
-T + 2 min   Rapid beeps
-T + 3 min   Continuous (no gaps)
+The dismiss token is set at build time via `CONF_DISMISS_TOKEN` (see Configuration). The request body is scanned for the token string; a simple `{"token":"<value>"}` payload works.
 
-Dismiss     Buzzer off, strobe off
-            Today marked cancelled — alarm resumes tomorrow
-```
+### MQTT (optional)
 
-Alarm times are checked once per second. The DS3231 is used only as a time source; no alarm registers or interrupts are used.
+MQTT is disabled by default (`MQTT_ENABLED = false` in `config.h`). When enabled it connects to the configured broker and subscribes to two topic patterns:
 
----
+| Topic | Payload | Effect |
+|-------|---------|--------|
+| `alarm/dismiss` | any | dismiss / cancel today |
+| `alarm/set/<day>` | `HH:MM` | set alarm for that day |
+| `alarm/set/<day>` | `off` | disable that day |
 
-## Dismiss / Pre-empt
+Day names are lowercase three-letter abbreviations: `sun`, `mon`, `tue`, `wed`, `thu`, `fri`, `sat`.
 
-The same endpoint handles both cases correctly:
+## Schedule persistence
 
-- **Before alarm fires** — cancels today's alarm; resumes at the next scheduled day
-- **During alarm** — silences buzzer and strobe immediately; resumes at the next scheduled day
+The per-day schedule is stored in the ESP32's NVS (non-volatile storage) via the `Preferences` library under the namespace `schedule`. On first boot the default is 06:30 Mon–Fri, disabled Sat–Sun. Changes via HTTP or MQTT are written immediately.
 
-Setting any alarm time after dismissing automatically un-cancels today.
+## Time keeping
 
-| Method | Command |
-|---|---|
-| HTTP | `curl -X POST http://<clock-ip>/dismiss` |
-| MQTT | `mosquitto_pub -h <broker-ip> -t alarm/dismiss -m 1` |
-| NFC | Tap phone to tag → iOS Shortcut POSTs to `/dismiss` |
+The DS3231 RTC is the primary time source and is set to local time. On boot and daily at `NTP_SYNC_HOUR` (default 04:00), the device syncs with the configured NTP servers and writes the result back to the RTC.
 
----
+If the RTC is absent or loses power, the device falls back to the ESP32's internal `getLocalTime()` after a successful NTP sync. If neither source is available the display shows dashes.
 
-## Per-Day Schedule
+If booting after today's alarm time has already passed, the alarm is automatically skipped for that day.
 
-Each day of the week has its own alarm time and enabled state. Defaults to Mon–Fri 06:30, weekends off.
+## Display indicators
 
-### Web UI
+- Colon: always on while time is displayed
+- Second decimal point (position 2): PM indicator
+- First decimal point (position 2, bit 2): alarm-armed indicator — lit when today's alarm is still pending, or when tomorrow has an alarm scheduled
 
-Browse to `http://<clock-ip>/` — a table with time pickers and checkboxes for each day, plus a live status panel showing the current state, next scheduled alarm, and whether today is cancelled.
+## Building and flashing
 
-### HTTP API
+The project uses [PlatformIO](https://platformio.org/) targeting `espressif32 / esp32dev`.
 
 ```bash
-# Set Monday to 06:30
-curl -X POST "http://<clock-ip>/alarm?day=mon&h=6&m=30"
+# Initial flash via USB
+pio run --target upload
 
-# Disable Saturday
-curl -X POST "http://<clock-ip>/alarm?day=sat&enabled=0"
-
-# Status (JSON)
-curl http://<clock-ip>/status
+# Subsequent updates over WiFi (OTA)
+pio run --target upload   # uses upload_protocol = espota
 ```
 
-Status response fields: `time`, `state` (idle/strobe/alarm), `cancelled`, `rtc`, `wifi_rssi`, `next_day`, `next_alarm`, `next_strobe`.
+OTA upload address and auth password are set in `platformio.ini`. Change `upload_port` to match your device's IP.
 
-### MQTT
+## Configuration
 
-MQTT is disabled by default (`MQTT_ENABLED = false` in `main.cpp`). To enable, set it to `true` and configure the broker in `secrets.ini`.
-
-```bash
-# Set Wednesday to 07:00
-mosquitto_pub -h <broker-ip> -t alarm/set/wed -m "07:00"
-
-# Disable Sunday
-mosquitto_pub -h <broker-ip> -t alarm/set/sun -m "off"
-
-# Dismiss
-mosquitto_pub -h <broker-ip> -t alarm/dismiss -m 1
-```
-
-| Topic | Payload | Action |
-|---|---|---|
-| `alarm/dismiss` | any | Dismiss or pre-empt today |
-| `alarm/set/<day>` | `HH:MM` | Set alarm time for day, enable it |
-| `alarm/set/<day>` | `off` | Disable alarm for that day |
-
-Days: `sun` `mon` `tue` `wed` `thu` `fri` `sat`
-
-Schedule is persisted to NVS — survives reboots and power loss.
-
----
-
-## Time Sync
-
-- **NTP** sync on boot via `pool.ntp.org` and `time.nist.gov`
-- **DS3231 RTC** is set to **local time** (not UTC) on boot and re-synced every 6 hours
-- If WiFi is unavailable, the DS3231 holds local time independently (coin cell on module)
-- Timezone configured via POSIX TZ string in `secrets.ini` — DST handled automatically
-
----
-
-## iOS NFC Dismiss Setup
-
-1. Stick an NTAG215 sticker on the coffee maker (or wherever you want the dismiss point)
-2. On iPhone: **Shortcuts → Automation → New Automation → NFC**
-3. Scan the tag, name it
-4. Add action: **Get Contents of URL** → Method: POST → URL: `http://<clock-ip>/dismiss`
-5. Disable "Ask Before Running" and "Notify When Run"
-
-Tapping the phone to the sticker silently POSTs to the clock. No app needed.
-
----
-
-## Setup & Flashing
-
-### Prerequisites
-
-- [VS Code](https://code.visualstudio.com/) + [PlatformIO extension](https://platformio.org/install/ide?install=vscode)
-
-### Configuration
-
-Copy `secrets.ini.example` to `secrets.ini` and fill in your values:
+Copy `secrets.ini.example` to `secrets.ini` and fill in your values. This file is loaded by PlatformIO and injected as build-time `#define` macros.
 
 ```ini
 [secrets]
@@ -178,81 +100,34 @@ build_flags =
   -DCONF_WIFI_PASSWORD=\"your-wifi-password\"
   -DCONF_OTA_HOSTNAME=\"alarm-clock\"
   -DCONF_OTA_PASSWORD=\"your-ota-password\"
-  -DCONF_TZ_STRING=\"CST6CDT,M3.2.0,M11.1.0\"
+  -DCONF_TZ_STRING=\"America/Chicago\"
   -DCONF_NTP_SERVER1=\"pool.ntp.org\"
   -DCONF_NTP_SERVER2=\"time.nist.gov\"
   -DCONF_MQTT_BROKER=\"192.168.1.x\"
   -DCONF_MQTT_PORT=1883
   -DCONF_MQTT_CLIENT_ID=\"alarm-clock\"
+  -DCONF_DISMISS_TOKEN=\"change-me\"
 ```
 
-Common timezone strings:
+`TZ_STRING` must be a POSIX timezone string (e.g. `CST6CDT,M3.2.0,M11.1.0`), not an IANA name.
 
-| Location | String |
-|---|---|
-| US Central (CST/CDT) | `CST6CDT,M3.2.0,M11.1.0` |
-| US Eastern (EST/EDT) | `EST5EDT,M3.2.0,M11.1.0` |
-| US Pacific (PST/PDT) | `PST8PDT,M3.2.0,M11.1.0` |
-| UTC | `UTC0` |
+Additional compile-time options in `config.h`:
 
-### First Flash (USB)
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `MQTT_ENABLED` | `false` | Enable MQTT client |
+| `SHOW_DISMISS_ON_WEB` | `false` | Show dismiss button in the web UI |
+| `NTP_SYNC_HOUR` | `4` | Hour of day for daily NTP re-sync |
+| `DISPLAY_BRIGHTNESS` | `4` | HT16K33 brightness (0–15) |
+| `BUZZER_ACTIVE_LOW` | `false` | Invert buzzer GPIO polarity |
 
-```bash
-pio run --target upload
-pio device monitor --baud 115200
-```
-
-If you get permission denied on `/dev/ttyUSB0`:
-```bash
-sudo usermod -aG uucp $USER   # or dialout — check: ls -la /dev/ttyUSB0
-# log out and back in
-```
-
-### OTA (All Subsequent Flashes)
-
-Note the IP from the serial monitor, then edit `platformio.ini`:
-
-```ini
-upload_protocol = espota
-upload_port     = 192.168.x.x
-upload_flags    = --auth=YOUR_OTA_PASSWORD
-```
-
----
-
-## Project Structure
-
-```
-adversarial-alarm-clock/
-├── platformio.ini
-├── secrets.ini          ← created from secrets.ini.example, not committed
-├── secrets.ini.example
-├── README.md
-└── src/
-    └── main.cpp
-```
-
----
+`secrets.ini` is gitignored. Do not commit it.
 
 ## Dependencies
 
-Managed automatically by PlatformIO via `platformio.ini`:
+Managed by PlatformIO:
 
-| Library | Purpose |
-|---|---|
-| `adafruit/Adafruit LED Backpack Library` | HT16K33 display driver |
-| `adafruit/Adafruit GFX Library` | Required by LED Backpack |
-| `adafruit/RTClib` | DS3231 RTC driver |
-| `knolleary/PubSubClient` | MQTT client |
-
----
-
-## Power Backup
-
-A 3S LiPo with a 12V BMS provides hours of backup power. This is not designed to survive multi-day outages — it's designed to survive someone yanking the power cord in a half-asleep attempt to get more sleep. Power is supplied via a panel-mount barrel jack. Unplugging it just switches to LiPo — the clock keeps going. The enclosure uses security Torx screws. Good luck.
-
----
-
-## License
-
-MIT
+- `adafruit/Adafruit LED Backpack Library`
+- `adafruit/Adafruit GFX Library`
+- `adafruit/RTClib`
+- `knolleary/PubSubClient`

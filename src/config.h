@@ -23,7 +23,7 @@ constexpr unsigned long MQTT_RECONNECT_MS = 5000;
 
 // Display
 constexpr uint8_t DISPLAY_I2C_ADDR   = 0x70;
-constexpr uint8_t DISPLAY_BRIGHTNESS = 5; // 0–15
+constexpr uint8_t DISPLAY_BRIGHTNESS = 4; // 0–15
 
 // GPIO
 constexpr uint8_t GPIO_RELAY  = 5;  // opto-isolated relay (HIGH = on)

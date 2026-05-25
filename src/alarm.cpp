@@ -11,20 +11,19 @@ static bool          buzzerToneOn     = false;
 struct AlarmPhase {
   unsigned long minElapsed; // ms
   unsigned long maxElapsed; // ms; 0xFFFFFFFFUL = open-ended
-  unsigned long period;     // ms; 0 = continuous on
-  unsigned long onTime;     // ms
-  bool          buzzerOn;
+  unsigned long buzzerPeriod;     // ms; 0 = continuous on
+  unsigned long buzzerOnTime;     // ms
   bool          strobeOn;
 };
 
 // Each phase is active while elapsed is in [minElapsed, maxElapsed).
 static const AlarmPhase ALARM_PHASES[] = {
-  {      0,  30000, 10000, 250, true, false }, // 0–30 s: slow beeps, no strobe
-  {  30000,  60000,  5000, 250, true, false }, // 30–60 s: medium beeps, no strobe
-  {  60000, 120000,  1000, 200, true, false }, // 1–2 min: faster beeps
-  { 120000, 150000,   500, 150, true, true  }, // 2–2.5 min: rapid beeps + strobe
-  { 150000, 180000,   200,  75, true, true  }, // 2.5–3 min: very rapid + strobe
-  { 180000, 0xFFFFFFFFUL, 0, 0, true, true  }, // 3 min+: continuous + strobe
+  {      0,  30000, 10000, 250, true},
+  {  30000,  60000,  5000, 250, true},
+  {  60000, 120000,  1000, 200, true},
+  { 120000, 150000,   500, 150, true},
+  { 150000, 180000,   200,  150, true},
+  { 180000, 0xFFFFFFFFUL, 0, 0, true}
 };
 
 void startBuzzer() {
@@ -69,22 +68,22 @@ void handleBuzzerEscalation() {
 
   digitalWrite(GPIO_RELAY, phase->strobeOn ? HIGH : LOW);
 
-  if (phase->period == 0) {
-    if (phase->buzzerOn && !buzzerToneOn) {
+  if (phase->buzzerPeriod == 0) {
+    if (phase->buzzerOnTime == 0 && !buzzerToneOn) {
       digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
       buzzerToneOn = true;
-    } else if (!phase->buzzerOn && buzzerToneOn) {
+    } else if (phase->buzzerOnTime != 0 && buzzerToneOn) {
       digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
       buzzerToneOn = false;
     }
     return;
   }
 
-  if (!buzzerToneOn && now - buzzerLastToggle >= (phase->period - phase->onTime)) {
+  if (!buzzerToneOn && now - buzzerLastToggle >= (phase->buzzerPeriod - phase->buzzerOnTime)) {
     digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
     buzzerToneOn     = true;
     buzzerLastToggle = now;
-  } else if (buzzerToneOn && now - buzzerLastToggle >= phase->onTime) {
+  } else if (buzzerToneOn && now - buzzerLastToggle >= phase->buzzerOnTime) {
     digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
     buzzerToneOn     = false;
     buzzerLastToggle = now;

@@ -11,7 +11,7 @@ void setupHttp() {
   httpServer.on("/", HTTP_GET, []() {
     String html = R"(<!DOCTYPE html><html><head>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>Alarm Clock</title>
+<title>alarm clock</title>
 <style>
   body{font-family:monospace;max-width:480px;margin:2em auto;padding:1em}
   h1{font-size:1.2em}
@@ -20,7 +20,7 @@ void setupHttp() {
   input[type=time]{font-size:1em}
   input[type=checkbox]{transform:scale(1.3)}
   button{padding:0.5em 1.5em;font-size:1em;margin-top:1em;cursor:pointer}
-  .dismiss{background:#c00;color:#fff;border:none;border-radius:4px}
+  .dismiss{background:#c00;color:#fff;}
 </style></head><body>
 <h1>Adversarial Alarm Clock</h1>
 <form method='POST' action='/alarm/ui'>
