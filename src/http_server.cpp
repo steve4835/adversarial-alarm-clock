@@ -41,11 +41,17 @@ void setupHttp() {
     html += R"(</table>
 <button type='submit'>Save Schedule</button>
 </form>
-<br>
-<form method='POST' action='/dismiss'>
-<button class='dismiss' type='submit'>Dismiss / Cancel Today</button>
-</form>
-<hr>
+<br>)";
+    const char* dismissBtn;
+    if (SHOW_DISMISS_ON_WEB) {
+      dismissBtn = "<form method='POST' action='/dismiss'><button class='dismiss' type='submit'>Dismiss / Cancel Today</button></form>";
+    } else {
+      dismissBtn = "";
+    }
+    char dismissSection[256];
+    snprintf(dismissSection, sizeof(dismissSection), "%s<hr>", dismissBtn);
+    html += dismissSection;
+    html += R"(
 <div id='diag' style='font-size:0.85em;color:#555'>Loading status...</div>
 <script>
 function refresh(){
@@ -55,7 +61,7 @@ function refresh(){
       'Cancelled today: <b>'+d.cancelled+'</b> &nbsp; RTC ok: <b>'+d.rtc+'</b><br>'+
       (d.rtc_power_lost ? '<b style="color:orange">⚠ RTC lost power — time may be drifted (pending NTP sync)</b><br>' : '')+
       'Next: <b>'+d.next_day+' '+d.next_alarm+'</b><br>'+
-      'NTP sync: <b>'+d.ntp_sync+'</b> &nbsp; WiFi: '+d.wifi_rssi+' dBm &nbsp; <small>(refreshes every 1s)</small>';
+      'NTP sync: <b>'+d.ntp_sync+'</b> &nbsp; WiFi: '+d.wifi_rssi+' dBm';
   }).catch(()=>{ document.getElementById('diag').innerHTML='(status unavailable)'; });
 }
 refresh(); setInterval(refresh,1000);
@@ -110,10 +116,14 @@ refresh(); setInterval(refresh,1000);
     httpServer.send(200, "text/plain", buf);
   });
 
-  // Dismiss / pre-empt
+  // Dismiss / pre-empt — body must contain DISMISS_TOKEN somewhere
   auto handleDismiss = []() {
-    httpServer.send(200, "text/plain", "ok");
-    dismiss();
+    if (httpServer.arg("plain").indexOf(DISMISS_TOKEN) < 0) {
+      httpServer.send(403, "text/plain", "forbidden");
+    } else {
+      httpServer.send(200, "text/plain", "ok");
+      dismiss();
+    }
   };
   httpServer.on("/dismiss", HTTP_POST, handleDismiss);
 

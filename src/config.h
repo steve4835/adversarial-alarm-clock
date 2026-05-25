@@ -31,3 +31,8 @@ constexpr uint8_t GPIO_BUZZER = 18; // active buzzer
 
 // LOW signal = buzzer on when true
 constexpr bool BUZZER_ACTIVE_LOW = false;
+
+constexpr bool SHOW_DISMISS_ON_WEB = false;
+
+// Dismiss token — must match the "token" field in the POST /dismiss body
+static const char* const DISMISS_TOKEN = CONF_DISMISS_TOKEN;
