@@ -22,8 +22,8 @@ void connectWiFi() {
     Serial.println("\nWiFi failed — running on RTC only.");
 }
 
-void syncNtp() {
-  if (WiFi.status() != WL_CONNECTED) return;
+bool syncNtp() {
+  if (WiFi.status() != WL_CONNECTED) return false;
   Serial.println("Syncing NTP...");
   configTzTime(TZ_STRING, NTP_SERVER1, NTP_SERVER2);
   struct tm timeinfo;
@@ -42,12 +42,13 @@ void syncNtp() {
       Serial.printf("RTC updated (local): %02d:%02d:%02d\n",
         timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     }
-    ntpSynced   = true;
-    lastNtpSync = millis();
-    return;
+    ntpSynced    = true;
+    rtcPowerLost = false;
+    lastNtpSync  = millis();
+    return true;
   } else {
     Serial.println("NTP sync failed — using RTC.");
-    return;
+    return false;
   }
 }
 

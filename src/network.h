@@ -1,5 +1,5 @@
 #pragma once
 
 void connectWiFi();
-void syncNtp();
+bool syncNtp();
 void setupOTA();
