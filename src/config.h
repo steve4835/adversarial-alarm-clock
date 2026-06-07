@@ -29,5 +29,10 @@ constexpr uint8_t DISPLAY_BRIGHTNESS = 5; // 0–15
 constexpr uint8_t GPIO_RELAY  = 5;  // opto-isolated relay (HIGH = on)
 constexpr uint8_t GPIO_BUZZER = 18; // active buzzer
 
+// I2C (RTC and Display)
+// For my own sanity because I forget every time
+// SDA: GPIO pin 21
+// SCL: GPIO pin 22
+
 // LOW signal = buzzer on when true
 constexpr bool BUZZER_ACTIVE_LOW = false;
