@@ -24,7 +24,6 @@ An ESP32-based alarm clock designed to be difficult to dismiss. The buzzer escal
 | 7805 regulator + heatsink | 1   |
 | 1K resistor               | 1   |
 | NPN transistor (2N3904)   | 1   |
-| Panel mount 5.5x2.        |     |
 | Protoboard/breadboard     | -   |
 | 0.1" male/female headers  | -   |
 | Dupont leads              | -   |
