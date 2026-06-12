@@ -6,13 +6,11 @@
  *   Adafruit 1.2" HT16K33 4-digit 7-segment display (I2C 0x70)
  *   DS3231 RTC (I2C 0x68, stores local time)
  *   Active buzzer        → GPIO_BUZZER (digitalWrite, LOW = on)
- *   Opto-isolated relay  → GPIO_RELAY  (strobe, HIGH = on)
  *   Buck converter: 12V → 5V → ESP32 VIN
  *
  * Alarm sequence (software polling at 1 Hz):
  *   T+0min  buzzer starts (slow beeps → continuous over 3 min)
- *            strobe relay joins after first escalation phase
- *   Dismiss: buzzer + strobe off, today marked cancelled
+ *   Dismiss: buzzer off, today marked cancelled
  *
  * Dismiss / pre-empt (same endpoint, correct behaviour either way):
  *   HTTP POST /dismiss
@@ -72,9 +70,7 @@ void setup() {
   delay(200);
   Serial.println("\n=== Adversarial Alarm Clock ===");
 
-  pinMode(GPIO_RELAY,  OUTPUT);
   pinMode(GPIO_BUZZER, OUTPUT);
-  digitalWrite(GPIO_RELAY,  LOW);
   digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
 
   Wire.begin();

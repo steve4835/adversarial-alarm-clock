@@ -26,8 +26,7 @@ constexpr uint8_t DISPLAY_I2C_ADDR   = 0x70;
 constexpr uint8_t DISPLAY_BRIGHTNESS = 4; // 0–15
 
 // GPIO
-constexpr uint8_t GPIO_RELAY  = 5;  // opto-isolated relay (HIGH = on)
-constexpr uint8_t GPIO_BUZZER = 18; // active buzzer
+constexpr uint8_t GPIO_BUZZER = 25; // active buzzer
 
 // I2C (RTC and Display)
 // For my own sanity because I forget every time

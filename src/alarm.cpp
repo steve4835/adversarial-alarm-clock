@@ -13,21 +13,19 @@ struct AlarmPhase {
   unsigned long maxElapsed; // ms; 0xFFFFFFFFUL = open-ended
   unsigned long buzzerPeriod;     // ms; 0 = continuous on
   unsigned long buzzerOnTime;     // ms
-  bool          strobeOn;
 };
 
 // Each phase is active while elapsed is in [minElapsed, maxElapsed).
 static const AlarmPhase ALARM_PHASES[] = {
-  {      0,  30000, 10000, 250, true},
-  {  30000,  60000,  5000, 250, true},
-  {  60000, 120000,  1000, 200, true},
-  { 120000, 150000,   500, 150, true},
-  { 150000, 180000,   200,  150, true},
-  { 180000, 0xFFFFFFFFUL, 0, 0, true}
+  {      0,  30000, 10000, 250},
+  {  30000,  60000,  5000, 250},
+  {  60000, 120000,  1000, 200},
+  { 120000, 150000,   500, 150},
+  { 150000, 180000,   200, 150},
+  { 180000, 0xFFFFFFFFUL, 0, 0}
 };
 
 void startBuzzer() {
-  digitalWrite(GPIO_RELAY, LOW); // relay is escalation-controlled; start clean
   digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
   alarmState       = ALARM;
   alarmStartedAt = buzzerLastToggle = millis();
@@ -47,7 +45,6 @@ void resetTodayCancelledIfSafe() {
 
 void dismiss() {
   digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
-  digitalWrite(GPIO_RELAY, LOW);
   alarmState     = IDLE;
   todayCancelled = true;
   Serial.println("Alarm dismissed / cancelled for today.");
@@ -65,8 +62,6 @@ void handleBuzzerEscalation() {
     if (elapsed >= p.minElapsed && elapsed < p.maxElapsed) { phase = &p; break; }
   }
   if (!phase) return;
-
-  digitalWrite(GPIO_RELAY, phase->strobeOn ? HIGH : LOW);
 
   if (phase->buzzerPeriod == 0) {
     if (phase->buzzerOnTime == 0 && !buzzerToneOn) {
