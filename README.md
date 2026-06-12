@@ -4,31 +4,50 @@ An ESP32-based alarm clock designed to be difficult to dismiss. The buzzer escal
 
 ## Hardware
 
-| Component | Details |
-|-----------|---------|
-| MCU | ESP32 DevKit |
-| Display | Adafruit 1.2" 4-digit 7-segment (HT16K33, I2C 0x70) |
-| RTC | DS3231 (I2C 0x68, stores local time) |
-| Buzzer | Active buzzer on GPIO 18 |
-| Relay | Opto-isolated relay on GPIO 5 (strobe output) |
-| Power | 12V input → buck converter → 5V → ESP32 VIN |
+### Main components
 
-The relay output is intended to drive a lamp or other load as a strobe. It activates at the start of the alarm and stays on until dismissal.
+| Component                                                                      | Link/Notes                                       |
+| ------------------------------------------------------------------------------ | ------------------------------------------------ |
+| ESP32 DevKit                                                                   |                                                  |
+| Adafruit 1.2" 4-digit 7-segment (HT16K33, I2C 0x70)                            | https://www.adafruit.com/product/1270            |
+| DS3231 RTC Module (I2C 0x68, stores local time) ((see note in "Time keeping")) | https://www.amazon.com/gp/product/B07Q7NZTQS<br> |
+| Active piezo buzzer                                                            |                                                  |
+| Battery                                                                        | https://www.amazon.com/dp/B0FG2P7RGP             |
+| Enclosure                                                                      | https://amazon.com/dp/B0B5QGM83Y                 |
+| 5.5x2.1mm female barrel jack (panel mount)                                     | https://amazon.com/dp/B07Y8MFCJD                 |
+
+### Misc components
+
+| Component                 | Qty |
+| ------------------------- | --- |
+| IN5819 Schottky Diode     | 2   |
+| 7805 regulator + heatsink | 1   |
+| 1K resistor               | 1   |
+| NPN transistor (2N3904)   | 1   |
+| Panel mount 5.5x2.        |     |
+| Protoboard/breadboard     | -   |
+| 0.1" male/female headers  | -   |
+| Dupont leads              | -   |
+
+## Circuit
+- Display and RTC share I2C bus to ESP32 standard SDA/SCL (21 & 22, respectively) pins, very straightforward.  Display VIO and VCC are both wired to 3.3V rail. RTC is wired to 5V rail.
+- The power/battery failover circuit uses an ideal diode setup. 2 IN5819 Schottky diodes with the cathodes both going to the 7805 input, and the anodes going to the battery pack positive lead and the 12V barrel jack center pin respectively.  This way whichever voltage is higher "wins", and the diodes prevent backflow. The 7805 output is the 5V rail.  Battery charge lead (female barrel jack) is wired directly to the enclosure's barrel jack.
+- The piezo buzzer is driven via a 2N3904 transistor to supply 5V driven from 3.3V GPIO. 1K resistor from GPIO to base, emitter to ground, collector to buzzer ground lead, 5V rail to buzzer positive lead.
 
 ## Alarm sequence
 
 The buzzer escalates through six phases, keyed on milliseconds elapsed since the alarm started:
 
-| Elapsed | Period | On-time | Strobe |
-|---------|--------|---------|--------|
-| 0–30 s | 10 s | 250 ms | yes |
-| 30–60 s | 5 s | 250 ms | yes |
-| 1–2 min | 1 s | 200 ms | yes |
-| 2–2.5 min | 500 ms | 150 ms | yes |
-| 2.5–3 min | 200 ms | 150 ms | yes |
-| 3 min+ | continuous | — | yes |
+| Elapsed   | Period     | On-time |
+| --------- | ---------- | ------- |
+| 0–30 s    | 10 s       | 250 ms  |
+| 30–60 s   | 5 s        | 250 ms  |
+| 1–2 min   | 1 s        | 200 ms  |
+| 2–2.5 min | 500 ms     | 150 ms  |
+| 2.5–3 min | 200 ms     | 150 ms  |
+| 3 min+    | continuous | —       |
 
-Dismissal stops both the buzzer and relay and marks today's alarm cancelled. The alarm will not re-fire until the next scheduled day.
+Dismissal stops the buzzer and marks today's alarm cancelled. The alarm will not re-fire until the next scheduled day.
 
 ## Control interfaces
 
@@ -68,6 +87,8 @@ The DS3231 RTC is the primary time source and is set to local time. On boot and 
 If the RTC is absent or loses power, the device falls back to the ESP32's internal `getLocalTime()` after a successful NTP sync. If neither source is available the display shows dashes.
 
 If booting after today's alarm time has already passed, the alarm is automatically skipped for that day.
+
+I realized after I finished the project that between the battery failover and the daily NTP sync, the RTC was probably wholly unnecessary.  It will never lose power, and NTP keeps the system clock accurate.  
 
 ## Display indicators
 
