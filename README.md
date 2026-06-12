@@ -8,7 +8,7 @@ An ESP32-based alarm clock designed to be difficult to dismiss. The buzzer escal
 
 | Component                                                                      | Link/Notes                                       |
 | ------------------------------------------------------------------------------ | ------------------------------------------------ |
-| ESP32 DevKit                                                                   |                                                  |
+| ESP32 DevKit                                                                   | https://www.amazon.com/dp/B08D5ZD528             |
 | Adafruit 1.2" 4-digit 7-segment (HT16K33, I2C 0x70)                            | https://www.adafruit.com/product/1270            |
 | DS3231 RTC Module (I2C 0x68, stores local time) ((see note in "Time keeping")) | https://www.amazon.com/gp/product/B07Q7NZTQS<br> |
 | Active piezo buzzer                                                            |                                                  |
