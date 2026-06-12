@@ -1,6 +1,6 @@
 # Adversarial Alarm Clock
 
-An ESP32-based alarm clock designed to be difficult to dismiss. The buzzer escalates over three minutes from slow intermittent beeps to continuous tone, and dismissal requires an authenticated HTTP or MQTT request rather than a physical button.
+An ESP32-based alarm clock designed to be difficult to dismiss. The buzzer escalates over three minutes from slow intermittent beeps to continuous tone, and dismissal requires an authenticated HTTP or MQTT request rather than a physical button.  Crucially, there is also a battery failover as well so unplugging the alarm is ineffectual.  The apparatus is in an enclosure as well, precluding the possibility of easily unplugging the power from the board either.
 
 ## Hardware
 
