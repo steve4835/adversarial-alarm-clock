@@ -20,6 +20,7 @@ extern bool          ntpSynced;
 extern bool          rtcPowerLost;
 extern unsigned long lastNtpSync;
 extern unsigned long lastMqttAttempt;
+extern char          firstSyncTime[30];         
 
 // Display
 extern unsigned long lastDisplayUpdate;

@@ -169,6 +169,7 @@ refresh(); setInterval(refresh,1000);
       "\"rtc\":%s,\"rtc_power_lost\":%s,\"wifi_rssi\":%d,"
       "\"next_day\":\"%s\",\"next_alarm\":\"%s\","
       "\"ntp_sync\":\"%s\","
+      "\"first_synced_at\":\"%s\","
       "\"hw_info\":"
       "{\"cpu_mhz\":%u,\"chip_model\":\"%s\",\"chip_rev\":%d,\"cores\":%d,"
       "\"flash_size\":%u,\"flash_speed\":%u,"
@@ -182,6 +183,7 @@ refresh(); setInterval(refresh,1000);
       WiFi.RSSI(),
       nextDay, nextTime,
       ntpSyncStr,
+      firstSyncTime,
       ESP.getCpuFreqMHz(), ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(),
       ESP.getFlashChipSize(), ESP.getFlashChipSpeed(),
       ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());

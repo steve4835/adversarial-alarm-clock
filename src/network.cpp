@@ -42,9 +42,10 @@ bool syncNtp() {
       Serial.printf("RTC updated (local): %02d:%02d:%02d\n",
         timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     }
-    ntpSynced    = true;
-    rtcPowerLost = false;
-    lastNtpSync  = millis();
+    ntpSynced     = true;
+    rtcPowerLost  = false;
+    lastNtpSync   = millis();
+    if (firstSyncTime[0] == '\0') { rtc.now().timestamp().toCharArray(firstSyncTime, 30); }
     return true;
   } else {
     Serial.println("NTP sync failed — using RTC.");

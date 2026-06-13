@@ -51,13 +51,14 @@ WebServer   httpServer(80);
 WiFiClient  wifiClient;
 PubSubClient mqtt(wifiClient);
 
-bool          rtcAvailable    = false;
-bool          ntpSynced       = false;
-bool          rtcPowerLost    = false;
-unsigned long lastNtpSync     = 0;
-unsigned long lastMqttAttempt = 0;
+bool          rtcAvailable      = false;
+bool          ntpSynced         = false;
+bool          rtcPowerLost      = false;
+unsigned long lastNtpSync       = 0;
+unsigned long lastMqttAttempt   = 0;
 unsigned long lastDisplayUpdate = 0;
-bool          alarmArmed      = false;
+bool          alarmArmed        = false;
+char          firstSyncTime[30] = "";
 
 AlarmState alarmState     = IDLE;
 bool       todayCancelled = false;
