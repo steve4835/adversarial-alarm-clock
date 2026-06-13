@@ -1,5 +1,6 @@
 #include "globals.h"
 #include "schedule.h"
+#include <time.h>
 
 const char* DAY_KEYS[] = { "sun","mon","tue","wed","thu","fri","sat" };
 DayAlarm    schedule[7];
@@ -59,10 +60,10 @@ bool nextAlarm(int fromWday, int fromHour, int fromMin, bool skipToday,
 }
 
 void logNextAlarm() {
-  if (!rtcAvailable) return;
-  DateTime now = rtc.now();
+  struct tm tm;
+  if (!getLocalTime(&tm)) return;
   int outDay; uint8_t outH, outM;
-  if (!nextAlarm(now.dayOfTheWeek(), now.hour(), now.minute(), todayCancelled,
+  if (!nextAlarm(tm.tm_wday, tm.tm_hour, tm.tm_min, todayCancelled,
                  outDay, outH, outM)) {
     Serial.println("No alarm days enabled.");
     return;

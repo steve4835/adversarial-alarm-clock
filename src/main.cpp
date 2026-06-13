@@ -4,7 +4,7 @@
  * Hardware:
  *   ESP32 DevKit
  *   Adafruit 1.2" HT16K33 4-digit 7-segment display (I2C 0x70)
- *   DS3231 RTC (I2C 0x68, stores local time)
+ *   DS3231 RTC (I2C 0x68, stores UTC)
  *   Active buzzer        → GPIO_BUZZER (digitalWrite, LOW = on)
  *   Buck converter: 12V → 5V → ESP32 VIN
  *
@@ -86,25 +86,30 @@ void setup() {
 
   loadSchedule();
 
+  // Set TZ unconditionally so getLocalTime() works for all subsequent calls
+  setenv("TZ", TZ_STRING, 1);
+  tzset();
+
+  // Only seed from RTC once we know it holds UTC (written by syncNtp).
+  // Before the first successful NTP sync the RTC may hold local time from
+  // old firmware; seeding from it would double-apply the TZ offset and fool
+  // the boot-time alarm guard into thinking it's already tomorrow.
+  {
+    prefs.begin("sys", true);
+    bool rtcIsUtc = prefs.getBool("rtc_utc", false);
+    prefs.end();
+    if (rtcAvailable && !rtc.lostPower() && rtcIsUtc) {
+      struct timeval tv = { .tv_sec = (time_t)rtc.now().unixtime(), .tv_usec = 0 };
+      settimeofday(&tv, nullptr);
+    }
+  }
+
   connectWiFi();
   if (WiFi.status() == WL_CONNECTED) {
     setupOTA();
-    syncNtp();    
+    syncNtp();
     setupHttp();
     if (MQTT_ENABLED) setupMqtt();
-  }
-
-  // If booting after today's alarm time, don't fire immediately
-  if (rtcAvailable) {
-    DateTime now  = rtc.now();
-    int today     = now.dayOfTheWeek();
-    int curMins   = now.hour() * 60 + now.minute();
-    int alarmMins = schedule[today].enabled
-                    ? schedule[today].hour * 60 + schedule[today].minute : -1;
-    if (alarmMins >= 0 && curMins >= alarmMins) {
-      todayCancelled = true;
-      Serial.println("Boot after alarm time — skipping today's alarm.");
-    }
   }
 
   logNextAlarm();
@@ -128,64 +133,58 @@ void loop() {
   if (now - lastDisplayUpdate >= 1000) {
     lastDisplayUpdate = now;
 
+    // Surface RTC power-loss and attempt recovery, but don't block on it
     if (rtcAvailable && rtc.lostPower()) {
-      Serial.println("WARNING: RTC lost power — time wrong until NTP sync");
-      rtcPowerLost = true;
-      ntpSynced = syncNtp();
-      if (ntpSynced) rtcPowerLost = false;
-      // Show drifted RTC time rather than blanking; DS3231 coin cell keeps the
-      // oscillator running through VCC loss, so drift is usually small
-      DateTime rtcNow = rtc.now();
-      updateDisplay(rtcNow.hour(), rtcNow.minute());
-      if (!todayCancelled) {
-        int curMins   = rtcNow.hour() * 60 + rtcNow.minute();
-        int alarmMins = schedule[rtcNow.dayOfTheWeek()].enabled
-                        ? schedule[rtcNow.dayOfTheWeek()].hour * 60 + schedule[rtcNow.dayOfTheWeek()].minute : -1;
-        if (alarmMins >= 0 && alarmState == IDLE && curMins >= alarmMins)
-          startBuzzer();
+      if (!rtcPowerLost) {
+        Serial.println("WARNING: RTC lost power — attempting NTP sync");
+        rtcPowerLost = true;
       }
-      // TODO: flash display or surface indicator for rtcPowerLost warning
-    } else if (rtcAvailable) {
-      DateTime rtcNow = rtc.now();
-      int todayIdx    = rtcNow.dayOfTheWeek();
+      if (WiFi.status() == WL_CONNECTED) {
+        ntpSynced = syncNtp();
+        if (ntpSynced) rtcPowerLost = false;
+      }
+    }
+
+    struct tm tm;
+    if (getLocalTime(&tm)) {
+      int todayIdx    = tm.tm_wday;
       int tomorrowIdx = (todayIdx + 1) % 7;
-      int curMins     = rtcNow.hour() * 60 + rtcNow.minute();
+      int curMins     = tm.tm_hour * 60 + tm.tm_min;
       int alarmMins   = schedule[todayIdx].enabled
                         ? schedule[todayIdx].hour * 60 + schedule[todayIdx].minute : -1;
 
-      alarmArmed = (alarmMins > curMins && !todayCancelled) || schedule[tomorrowIdx].enabled;
-      updateDisplay(rtcNow.hour(), rtcNow.minute());
+      // One-shot boot check: runs on the first valid time reading, regardless of
+      // whether time came from RTC or NTP. Prevents firing a past alarm after reboot.
+      static bool bootCheckDone = false;
+      if (!bootCheckDone) {
+        bootCheckDone = true;
+        if (alarmMins >= 0 && curMins >= alarmMins) {
+          todayCancelled = true;
+          Serial.println("Boot after alarm time — skipping today's alarm.");
+        }
+      }
 
-      // Midnight rollover: reuse rtcNow so no extra I2C read on every loop tick
+      alarmArmed = (alarmMins > curMins && !todayCancelled) || schedule[tomorrowIdx].enabled;
+      updateDisplay(tm.tm_hour, tm.tm_min);
+
       static int  lastDay        = -1;
       static bool ntpSyncedToday = false;
-      if (lastDay != -1 && rtcNow.day() != (uint8_t)lastDay) {
+      if (lastDay != -1 && tm.tm_mday != lastDay) {
         todayCancelled = false;
         ntpSyncedToday = false;
         Serial.println("Midnight rollover — todayCancelled reset.");
       }
-      lastDay = rtcNow.day();
+      lastDay = tm.tm_mday;
 
       if (!todayCancelled) {
         if (alarmMins >= 0 && alarmState == IDLE && curMins >= alarmMins)
           startBuzzer();
       }
 
-      // Periodic NTP re-sync — flag prevents missing the narrow time window under load
+      // Periodic NTP re-sync at true wall-clock hour (DST-correct)
       if (WiFi.status() == WL_CONNECTED &&
-          rtcNow.hour() == NTP_SYNC_HOUR && !ntpSyncedToday) {
-          ntpSyncedToday = syncNtp();
-      }
-    } else if (ntpSynced) {
-      struct tm ti;
-      if (getLocalTime(&ti)) {
-        int curMins   = ti.tm_hour * 60 + ti.tm_min;
-        int alarmMins = schedule[ti.tm_wday].enabled
-                        ? schedule[ti.tm_wday].hour * 60 + schedule[ti.tm_wday].minute : -1;
-        alarmArmed = (alarmMins > curMins && !todayCancelled) || schedule[(ti.tm_wday + 1) % 7].enabled;
-        updateDisplay(ti.tm_hour, ti.tm_min);
-        if (alarmMins >= 0 && alarmState == IDLE && !todayCancelled && curMins >= alarmMins)
-          startBuzzer();
+          tm.tm_hour == (int)NTP_SYNC_HOUR && !ntpSyncedToday) {
+        ntpSyncedToday = syncNtp();
       }
     } else {
       showDashes();

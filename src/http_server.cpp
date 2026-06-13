@@ -133,15 +133,17 @@ refresh(); setInterval(refresh,1000);
     char nextDay[4]  = "---";
     char nextTime[6] = "--:--";
 
-    if (rtcAvailable) {
-      DateTime now = rtc.now();
-      snprintf(timeStr, sizeof(timeStr), "%02d:%02d:%02d",
-        now.hour(), now.minute(), now.second());
-      int outDay; uint8_t outH, outM;
-      if (nextAlarm(now.dayOfTheWeek(), now.hour(), now.minute(), todayCancelled,
-                    outDay, outH, outM)) {
-        strncpy(nextDay, DAY_KEYS[outDay], sizeof(nextDay) - 1);
-        snprintf(nextTime, sizeof(nextTime), "%02d:%02d", outH, outM);
+    {
+      struct tm tm;
+      if (getLocalTime(&tm)) {
+        snprintf(timeStr, sizeof(timeStr), "%02d:%02d:%02d",
+          tm.tm_hour, tm.tm_min, tm.tm_sec);
+        int outDay; uint8_t outH, outM;
+        if (nextAlarm(tm.tm_wday, tm.tm_hour, tm.tm_min, todayCancelled,
+                      outDay, outH, outM)) {
+          strncpy(nextDay, DAY_KEYS[outDay], sizeof(nextDay) - 1);
+          snprintf(nextTime, sizeof(nextTime), "%02d:%02d", outH, outM);
+        }
       }
     }
 

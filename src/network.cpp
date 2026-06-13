@@ -35,17 +35,21 @@ bool syncNtp() {
   Serial.println();
   if (retries < 10) {
     if (rtcAvailable) {
-      // Store local time so alarm hour comparisons stay consistent
-      rtc.adjust(DateTime(
-        timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-        timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec));
-      Serial.printf("RTC updated (local): %02d:%02d:%02d\n",
+      // Store UTC so the RTC survives DST transitions without discontinuity
+      rtc.adjust(DateTime((uint32_t)time(nullptr)));
+      Serial.printf("RTC updated (UTC): %02d:%02d:%02d local\n",
         timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+      // Mark RTC as UTC so subsequent boots can trust the seed
+      prefs.begin("sys", false);
+      prefs.putBool("rtc_utc", true);
+      prefs.end();
     }
     ntpSynced     = true;
     rtcPowerLost  = false;
     lastNtpSync   = millis();
-    if (firstSyncTime[0] == '\0') { rtc.now().timestamp().toCharArray(firstSyncTime, 30); }
+    if (firstSyncTime[0] == '\0') {
+      strftime(firstSyncTime, sizeof(firstSyncTime), "%Y-%m-%dT%H:%M:%S", &timeinfo);
+    }
     return true;
   } else {
     Serial.println("NTP sync failed — using RTC.");

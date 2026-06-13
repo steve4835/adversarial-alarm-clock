@@ -2,6 +2,7 @@
 #include "alarm.h"
 #include "config.h"
 #include "schedule.h"
+#include <time.h>
 
 // Module-private state; not exposed through globals
 static unsigned long alarmStartedAt  = 0;
@@ -34,11 +35,11 @@ void startBuzzer() {
 }
 
 void resetTodayCancelledIfSafe() {
-  if (!rtcAvailable) { todayCancelled = false; return; }
-  DateTime now = rtc.now();
-  int curMins   = now.hour() * 60 + now.minute();
-  int alarmMins = schedule[now.dayOfTheWeek()].enabled
-                  ? schedule[now.dayOfTheWeek()].hour * 60 + schedule[now.dayOfTheWeek()].minute
+  struct tm tm;
+  if (!getLocalTime(&tm)) { todayCancelled = false; return; }
+  int curMins   = tm.tm_hour * 60 + tm.tm_min;
+  int alarmMins = schedule[tm.tm_wday].enabled
+                  ? schedule[tm.tm_wday].hour * 60 + schedule[tm.tm_wday].minute
                   : -1;
   todayCancelled = (alarmMins >= 0 && curMins >= alarmMins);
 }
