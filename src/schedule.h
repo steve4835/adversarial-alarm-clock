@@ -16,3 +16,6 @@ bool nextAlarm(int fromWday, int fromHour, int fromMin, bool skipToday,
                int& outDay, uint8_t& outH, uint8_t& outM);
 
 void logNextAlarm();
+
+// Returns the locked day index (0-6) if an alarm fires within 60 minutes, or -1 if none.
+int alarmImminent(const struct tm& now);

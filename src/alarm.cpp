@@ -36,7 +36,7 @@ void startBuzzer() {
 
 void resetTodayCancelledIfSafe() {
   struct tm tm;
-  if (!getLocalTime(&tm)) { todayCancelled = false; return; }
+  if (!getLocalTime(&tm)) return;
   int curMins   = tm.tm_hour * 60 + tm.tm_min;
   int alarmMins = schedule[tm.tm_wday].enabled
                   ? schedule[tm.tm_wday].hour * 60 + schedule[tm.tm_wday].minute

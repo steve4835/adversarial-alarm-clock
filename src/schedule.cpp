@@ -59,6 +59,26 @@ bool nextAlarm(int fromWday, int fromHour, int fromMin, bool skipToday,
   return false;
 }
 
+int alarmImminent(const struct tm& now) {
+  int currentMins = now.tm_hour * 60 + now.tm_min;
+
+  if (!todayCancelled && schedule[now.tm_wday].enabled) {
+    int diff = schedule[now.tm_wday].hour * 60 + schedule[now.tm_wday].minute - currentMins;
+    if (diff >= 0 && diff <= 60) return now.tm_wday;
+  }
+
+  int minsUntilMidnight = 1440 - currentMins;
+  if (minsUntilMidnight < 60) {
+    int tomorrow = (now.tm_wday + 1) % 7;
+    if (schedule[tomorrow].enabled) {
+      int alarmMins = schedule[tomorrow].hour * 60 + schedule[tomorrow].minute;
+      if (minsUntilMidnight + alarmMins <= 60) return tomorrow;
+    }
+  }
+
+  return -1;
+}
+
 void logNextAlarm() {
   struct tm tm;
   if (!getLocalTime(&tm)) return;

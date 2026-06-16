@@ -41,6 +41,7 @@ void setupHttp() {
     html += R"(</table>
 <button type='submit'>Save Schedule</button>
 </form>
+<div id='lock-msg' style='display:none;color:#c00;margin:0.5em 0'>Next alarm fires within 1 hour &mdash; that row is locked.</div>
 <br>)";
     const char* dismissBtn;
     if (SHOW_DISMISS_ON_WEB) {
@@ -62,6 +63,15 @@ function refresh(){
       (d.rtc_power_lost ? '<b style="color:orange">⚠ RTC lost power — time may be drifted (pending NTP sync)</b><br>' : '')+
       'Next: <b>'+d.next_day+' '+d.next_alarm+'</b><br>'+
       'NTP sync: <b>'+d.ntp_sync+'</b> &nbsp; WiFi: '+d.wifi_rssi+' dBm';
+    var ld=d.locked_day;
+    document.getElementById('lock-msg').style.display=(ld>=0)?'':'none';
+    for(var i=0;i<7;i++){
+      var lock=(i===ld);
+      var t=document.querySelector('input[name="t'+i+'"]');
+      var e=document.querySelector('input[name="e'+i+'"]');
+      if(t)t.disabled=lock;
+      if(e)e.disabled=lock;
+    }
   }).catch(()=>{ document.getElementById('diag').innerHTML='(status unavailable)'; });
 }
 refresh(); setInterval(refresh,1000);
@@ -72,7 +82,10 @@ refresh(); setInterval(refresh,1000);
 
   // Web UI form POST — saves all days at once
   httpServer.on("/alarm/ui", HTTP_POST, []() {
+    struct tm tm;
+    int lockedDay = getLocalTime(&tm) ? alarmImminent(tm) : -1;
     for (int d = 0; d < 7; d++) {
+      if (d == lockedDay) continue;
       String tKey = "t" + String(d);
       String eKey = "e" + String(d);
       if (httpServer.hasArg(tKey)) {
@@ -101,6 +114,13 @@ refresh(); setInterval(refresh,1000);
     if (d < 0) {
       httpServer.send(400, "text/plain", "unknown day — use sun/mon/tue/wed/thu/fri/sat");
       return;
+    }
+    {
+      struct tm tm;
+      if (getLocalTime(&tm) && d == alarmImminent(tm)) {
+        httpServer.send(409, "text/plain", "alarm fires within 60 minutes — changes locked");
+        return;
+      }
     }
     if (httpServer.hasArg("h")) schedule[d].hour   = httpServer.arg("h").toInt();
     if (httpServer.hasArg("m")) schedule[d].minute = httpServer.arg("m").toInt();
@@ -132,6 +152,7 @@ refresh(); setInterval(refresh,1000);
     char timeStr[9]  = "--:--:--";
     char nextDay[4]  = "---";
     char nextTime[6] = "--:--";
+    int  lockedDay   = -1;
 
     {
       struct tm tm;
@@ -144,6 +165,7 @@ refresh(); setInterval(refresh,1000);
           strncpy(nextDay, DAY_KEYS[outDay], sizeof(nextDay) - 1);
           snprintf(nextTime, sizeof(nextTime), "%02d:%02d", outH, outM);
         }
+        lockedDay = alarmImminent(tm);
       }
     }
 
@@ -165,9 +187,10 @@ refresh(); setInterval(refresh,1000);
       }
     }
 
-    char buf[640];
+    char buf[660];
     snprintf(buf, sizeof(buf),
       "{\"time\":\"%s\",\"state\":\"%s\",\"cancelled\":%s,"
+      "\"locked_day\":%d,"
       "\"rtc\":%s,\"rtc_power_lost\":%s,\"wifi_rssi\":%d,"
       "\"next_day\":\"%s\",\"next_alarm\":\"%s\","
       "\"ntp_sync\":\"%s\","
@@ -180,6 +203,7 @@ refresh(); setInterval(refresh,1000);
       timeStr,
       alarmState == IDLE ? "idle" : "alarm",
       todayCancelled ? "true" : "false",
+      lockedDay,
       rtcAvailable   ? "true" : "false",
       rtcPowerLost   ? "true" : "false",
       WiFi.RSSI(),
