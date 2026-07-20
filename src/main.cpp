@@ -37,6 +37,7 @@
 #include "globals.h"
 #include "schedule.h"
 #include "alarm.h"
+#include "keep_awake.h"
 #include "display.h"
 #include "network.h"
 #include "http_server.h"
@@ -128,6 +129,7 @@ void loop() {
 
   // Non-blocking buzzer escalation
   handleBuzzerEscalation();
+  handleKeepAwake();
 
   // Display + alarm check at 1 Hz
   if (now - lastDisplayUpdate >= 1000) {

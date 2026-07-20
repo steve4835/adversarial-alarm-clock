@@ -2,6 +2,7 @@
 #include "alarm.h"
 #include "config.h"
 #include "schedule.h"
+#include "keep_awake.h"
 #include <time.h>
 
 // Module-private state; not exposed through globals
@@ -45,10 +46,13 @@ void resetTodayCancelledIfSafe() {
 }
 
 void dismiss() {
+  bool wasRinging = (alarmState == ALARM);
   digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
   alarmState     = IDLE;
   todayCancelled = true;
   Serial.println("Alarm dismissed / cancelled for today.");
+  cancelKeepAwake();
+  if (wasRinging) startKeepAwake();
   logNextAlarm();
 }
 

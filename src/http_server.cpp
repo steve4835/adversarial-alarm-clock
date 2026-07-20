@@ -2,6 +2,7 @@
 #include "http_server.h"
 #include "schedule.h"
 #include "alarm.h"
+#include "keep_awake.h"
 #include "config.h"
 #include <WiFi.h>
 
@@ -53,8 +54,12 @@ void setupHttp() {
     snprintf(dismissSection, sizeof(dismissSection), "%s<hr>", dismissBtn);
     html += dismissSection;
     html += R"(
+<button id='ka-dismiss' class='dismiss' style='display:none' onclick='dismissKeepAwake()'>Dismiss Keep-Awake Chirp</button>
 <div id='diag' style='font-size:0.85em;color:#555'>Loading status...</div>
 <script>
+function dismissKeepAwake(){
+  fetch('/dismissKeepAwake',{method:'POST'}).then(refresh);
+}
 function refresh(){
   fetch('/status').then(r=>r.json()).then(d=>{
     document.getElementById('diag').innerHTML=
@@ -62,9 +67,11 @@ function refresh(){
       'Cancelled today: <b>'+d.cancelled+'</b> &nbsp; RTC ok: <b>'+d.rtc+'</b><br>'+
       (d.rtc_power_lost ? '<b style="color:orange">⚠ RTC lost power — time may be drifted (pending NTP sync)</b><br>' : '')+
       'Next: <b>'+d.next_day+' '+d.next_alarm+'</b><br>'+
-      'NTP sync: <b>'+d.ntp_sync+'</b> &nbsp; WiFi: '+d.wifi_rssi+' dBm';
+      'NTP sync: <b>'+d.ntp_sync+'</b> &nbsp; WiFi: '+d.wifi_rssi+' dBm'+
+      (d.keep_awake ? '<br><b style="color:#c00">Keep-awake active</b>' : '');
     var ld=d.locked_day;
     document.getElementById('lock-msg').style.display=(ld>=0)?'':'none';
+    document.getElementById('ka-dismiss').style.display=d.keep_awake_dismissable?'':'none';
     for(var i=0;i<7;i++){
       var lock=(i===ld);
       var t=document.querySelector('input[name="t'+i+'"]');
@@ -147,6 +154,15 @@ refresh(); setInterval(refresh,1000);
   };
   httpServer.on("/dismiss", HTTP_POST, handleDismiss);
 
+  // Dismiss the current/next keep-awake chirp — no body required.
+  httpServer.on("/dismissKeepAwake", HTTP_POST, []() {
+    if (dismissKeepAwake()) {
+      httpServer.send(200, "text/plain", "ok");
+    } else {
+      httpServer.send(409, "text/plain", "not within a keep-awake dismiss window");
+    }
+  });
+
   // Status JSON
   httpServer.on("/status", HTTP_GET, []() {
     char timeStr[9]  = "--:--:--";
@@ -187,7 +203,7 @@ refresh(); setInterval(refresh,1000);
       }
     }
 
-    char buf[660];
+    char buf[760];
     snprintf(buf, sizeof(buf),
       "{\"time\":\"%s\",\"state\":\"%s\",\"cancelled\":%s,"
       "\"locked_day\":%d,"
@@ -195,6 +211,7 @@ refresh(); setInterval(refresh,1000);
       "\"next_day\":\"%s\",\"next_alarm\":\"%s\","
       "\"ntp_sync\":\"%s\","
       "\"first_synced_at\":\"%s\","
+      "\"keep_awake\":%s,\"keep_awake_dismissable\":%s,"
       "\"hw_info\":"
       "{\"cpu_mhz\":%u,\"chip_model\":\"%s\",\"chip_rev\":%d,\"cores\":%d,"
       "\"flash_size\":%u,\"flash_speed\":%u,"
@@ -210,6 +227,8 @@ refresh(); setInterval(refresh,1000);
       nextDay, nextTime,
       ntpSyncStr,
       firstSyncTime,
+      isKeepAwakeActive()          ? "true" : "false",
+      keepAwakeDismissWindowOpen() ? "true" : "false",
       ESP.getCpuFreqMHz(), ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(),
       ESP.getFlashChipSize(), ESP.getFlashChipSpeed(),
       ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
