@@ -1,8 +1,11 @@
 #pragma once
 
+#include "types.h"
+
 // Call from alarm.cpp::dismiss() when it silenced an alarm that was actually
-// ringing. Begins the 15-min-interval chirp sequence for the next 2 hours.
-void startKeepAwake();
+// ringing. Begins the 15-min-interval chirp sequence, running for as long as
+// the given mode specifies (KA_OFF is a no-op — caller need not check first).
+void startKeepAwake(KeepAwakeMode mode);
 
 // Immediately ends any in-progress keep-awake sequence (silences the buzzer
 // if currently chirping). No-op if none is active.

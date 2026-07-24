@@ -1,6 +1,7 @@
 #include "globals.h"
 #include "display.h"
 #include "config.h"
+#include "keep_awake.h"
 #include <Adafruit_LEDBackpack.h>
 
 static Adafruit_7segment display;
@@ -26,7 +27,11 @@ void updateDisplay(int hour, int minute) {
     display.writeDigitRaw(0, SEG_BLANK); // blank leading digit for single-digit hours
   display.writeDigitNum(1, h % 10, false);
   uint8_t special = COLON_BIT;
-  if (alarmArmed)  special |= ALARM_ARMED_BIT;
+  // Flash the alarm dot (~1 Hz) while the buzzer is actively ringing or a
+  // keep-awake chirp sequence is running; otherwise it's solid when armed.
+  bool alarmActive = (alarmState == ALARM) || isKeepAwakeActive();
+  bool dotOn = alarmActive ? ((millis() / 500) % 2 == 0) : alarmArmed;
+  if (dotOn)       special |= ALARM_ARMED_BIT;
   if (hour >= 12)  special |= PM_BIT;
   display.writeDigitRaw(2, special);
   display.writeDigitNum(3, minute / 10, false);

@@ -26,9 +26,11 @@ void setupHttp() {
 <h1>Adversarial Alarm Clock</h1>
 <form method='POST' action='/alarm/ui'>
 <table>
-<tr><th>Day</th><th>Time</th><th>On</th></tr>)";
+<tr><th>Day</th><th>Time</th><th>On</th><th>Keep-awake</th></tr>)";
 
     const char* dayNames[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+    const char* kaModes[]  = {"off", "15min", "2hr"};
+    const char* kaLabels[] = {"Off", "15 min", "2 hrs"};
     for (int d = 0; d < 7; d++) {
       html += "<tr><td>" + String(dayNames[d]) + "</td><td>";
       html += "<input type='time' name='t" + String(d) + "' value='";
@@ -37,7 +39,14 @@ void setupHttp() {
       html += String(t) + "'></td><td>";
       html += "<input type='checkbox' name='e" + String(d) + "'";
       if (schedule[d].enabled) html += " checked";
-      html += "></td></tr>";
+      html += "></td><td>";
+      html += "<select name='ka" + String(d) + "'>";
+      for (int i = 0; i < 3; i++) {
+        html += "<option value='" + String(kaModes[i]) + "'";
+        if (schedule[d].keepAwake == i) html += " selected";
+        html += ">" + String(kaLabels[i]) + "</option>";
+      }
+      html += "</select></td></tr>";
     }
     html += R"(</table>
 <button type='submit'>Save Schedule</button>
@@ -76,8 +85,10 @@ function refresh(){
       var lock=(i===ld);
       var t=document.querySelector('input[name="t'+i+'"]');
       var e=document.querySelector('input[name="e'+i+'"]');
+      var ka=document.querySelector('select[name="ka'+i+'"]');
       if(t)t.disabled=lock;
       if(e)e.disabled=lock;
+      if(ka)ka.disabled=lock;
     }
   }).catch(()=>{ document.getElementById('diag').innerHTML='(status unavailable)'; });
 }
@@ -93,8 +104,9 @@ refresh(); setInterval(refresh,1000);
     int lockedDay = getLocalTime(&tm) ? alarmImminent(tm) : -1;
     for (int d = 0; d < 7; d++) {
       if (d == lockedDay) continue;
-      String tKey = "t" + String(d);
-      String eKey = "e" + String(d);
+      String tKey  = "t" + String(d);
+      String eKey  = "e" + String(d);
+      String kaKey = "ka" + String(d);
       if (httpServer.hasArg(tKey)) {
         String t = httpServer.arg(tKey); // "HH:MM"
         if (t.length() >= 5 && t[2] == ':') {
@@ -102,6 +114,11 @@ refresh(); setInterval(refresh,1000);
           schedule[d].minute = t.substring(3, 5).toInt();
         }
         schedule[d].enabled = httpServer.hasArg(eKey);
+        KeepAwakeMode mode;
+        if (httpServer.hasArg(kaKey) &&
+            keepAwakeModeFromString(httpServer.arg(kaKey).c_str(), mode)) {
+          schedule[d].keepAwake = mode;
+        }
         saveDay(d);
       }
     }
@@ -134,12 +151,21 @@ refresh(); setInterval(refresh,1000);
     schedule[d].enabled = httpServer.hasArg("enabled")
                           ? (httpServer.arg("enabled").toInt() != 0)
                           : true;
+    if (httpServer.hasArg("keepAwake")) {
+      KeepAwakeMode mode;
+      if (!keepAwakeModeFromString(httpServer.arg("keepAwake").c_str(), mode)) {
+        httpServer.send(400, "text/plain", "unknown keepAwake — use off/15min/2hr");
+        return;
+      }
+      schedule[d].keepAwake = mode;
+    }
     saveDay(d);
     resetTodayCancelledIfSafe();
     logNextAlarm();
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%s %02d:%02d enabled=%d",
-      DAY_KEYS[d], schedule[d].hour, schedule[d].minute, schedule[d].enabled);
+    char buf[80];
+    snprintf(buf, sizeof(buf), "%s %02d:%02d enabled=%d keepAwake=%s",
+      DAY_KEYS[d], schedule[d].hour, schedule[d].minute, schedule[d].enabled,
+      keepAwakeModeToString(schedule[d].keepAwake));
     httpServer.send(200, "text/plain", buf);
   });
 

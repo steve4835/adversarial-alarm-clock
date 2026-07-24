@@ -10,6 +10,10 @@ void loadSchedule();
 void saveDay(int d);
 int  dayIndex(const char* name);
 
+// "off" / "15min" / "2hr" — used by both the API and the web UI form.
+bool        keepAwakeModeFromString(const char* s, KeepAwakeMode& out);
+const char* keepAwakeModeToString(KeepAwakeMode m);
+
 // Find the next enabled alarm from a given point.
 // skipToday forces the search to start at offset 1 (use when todayCancelled).
 bool nextAlarm(int fromWday, int fromHour, int fromMin, bool skipToday,

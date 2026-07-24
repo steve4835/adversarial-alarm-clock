@@ -8,26 +8,30 @@ DayAlarm    schedule[7];
 void loadSchedule() {
   prefs.begin("schedule", true); // read-only
   for (int d = 0; d < 7; d++) {
-    char keyH[8], keyM[8], keyE[8];
-    snprintf(keyH, sizeof(keyH), "%sh", DAY_KEYS[d]);
-    snprintf(keyM, sizeof(keyM), "%sm", DAY_KEYS[d]);
-    snprintf(keyE, sizeof(keyE), "%se", DAY_KEYS[d]);
-    schedule[d].hour    = prefs.getUChar(keyH, 6);
-    schedule[d].minute  = prefs.getUChar(keyM, 30);
-    schedule[d].enabled = prefs.getBool(keyE, d >= 1 && d <= 5); // Mon–Fri default
+    char keyH[8], keyM[8], keyE[8], keyKA[8];
+    snprintf(keyH,  sizeof(keyH),  "%sh",  DAY_KEYS[d]);
+    snprintf(keyM,  sizeof(keyM),  "%sm",  DAY_KEYS[d]);
+    snprintf(keyE,  sizeof(keyE),  "%se",  DAY_KEYS[d]);
+    snprintf(keyKA, sizeof(keyKA), "%ska", DAY_KEYS[d]);
+    schedule[d].hour      = prefs.getUChar(keyH, 6);
+    schedule[d].minute    = prefs.getUChar(keyM, 30);
+    schedule[d].enabled   = prefs.getBool(keyE, d >= 1 && d <= 5); // Mon–Fri default
+    schedule[d].keepAwake = (KeepAwakeMode)prefs.getUChar(keyKA, KA_15MIN);
   }
   prefs.end();
 }
 
 void saveDay(int d) {
   prefs.begin("schedule", false); // read-write
-  char keyH[8], keyM[8], keyE[8];
-  snprintf(keyH, sizeof(keyH), "%sh", DAY_KEYS[d]);
-  snprintf(keyM, sizeof(keyM), "%sm", DAY_KEYS[d]);
-  snprintf(keyE, sizeof(keyE), "%se", DAY_KEYS[d]);
-  prefs.putUChar(keyH, schedule[d].hour);
-  prefs.putUChar(keyM, schedule[d].minute);
-  prefs.putBool(keyE,  schedule[d].enabled);
+  char keyH[8], keyM[8], keyE[8], keyKA[8];
+  snprintf(keyH,  sizeof(keyH),  "%sh",  DAY_KEYS[d]);
+  snprintf(keyM,  sizeof(keyM),  "%sm",  DAY_KEYS[d]);
+  snprintf(keyE,  sizeof(keyE),  "%se",  DAY_KEYS[d]);
+  snprintf(keyKA, sizeof(keyKA), "%ska", DAY_KEYS[d]);
+  prefs.putUChar(keyH,  schedule[d].hour);
+  prefs.putUChar(keyM,  schedule[d].minute);
+  prefs.putBool(keyE,   schedule[d].enabled);
+  prefs.putUChar(keyKA, schedule[d].keepAwake);
   prefs.end();
 }
 
@@ -36,6 +40,22 @@ int dayIndex(const char* name) {
     if (strcasecmp(name, DAY_KEYS[i]) == 0) return i;
   }
   return -1;
+}
+
+bool keepAwakeModeFromString(const char* s, KeepAwakeMode& out) {
+  if (strcasecmp(s, "off")   == 0) { out = KA_OFF;   return true; }
+  if (strcasecmp(s, "15min") == 0) { out = KA_15MIN; return true; }
+  if (strcasecmp(s, "2hr")   == 0) { out = KA_2HR;   return true; }
+  return false;
+}
+
+const char* keepAwakeModeToString(KeepAwakeMode m) {
+  switch (m) {
+    case KA_OFF:   return "off";
+    case KA_2HR:   return "2hr";
+    case KA_15MIN:
+    default:       return "15min";
+  }
 }
 
 bool nextAlarm(int fromWday, int fromHour, int fromMin, bool skipToday,

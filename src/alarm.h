@@ -1,6 +1,6 @@
 #pragma once
 
-void startBuzzer();
+void startBuzzer(int day); // day = schedule[] index (0=Sun..6=Sat) the alarm belongs to
 void dismiss();
 void handleBuzzerEscalation(); // call every loop iteration; non-blocking
 

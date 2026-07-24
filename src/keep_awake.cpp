@@ -1,18 +1,19 @@
 #include "globals.h"
 #include "keep_awake.h"
 #include "config.h"
+#include "schedule.h"
 
 enum KeepAwakeState { KA_IDLE, KA_WAITING, KA_CHIRPING };
 
 static KeepAwakeState kaState           = KA_IDLE;
 static unsigned long  kaWindowStartedAt = 0; // millis anchor; all timing is elapsed-since-this
-static int            kaOccurrenceIndex = 0; // 0-based; occurrence N fires at (N+1)*INTERVAL
+static int            kaOccurrenceIndex = 0; // 0-based; occurrence N fires at (N+1)*KEEP_AWAKE_INTERVAL_MS
 static bool           kaOccurrenceDismissed = false;
 static unsigned long  kaChirpStartedAt  = 0;
 static unsigned long  kaChirpLastToggle = 0;
 static bool           kaChirpToneOn     = false;
 
-static const int TOTAL_OCCURRENCES = KEEP_AWAKE_DURATION_MS / KEEP_AWAKE_INTERVAL_MS;
+static int            kaTotalOccurrences = 0;
 
 // elapsed time (ms) at which the occurrence at kaOccurrenceIndex is due
 static unsigned long occurrenceDueAt() {
@@ -26,7 +27,7 @@ static void turnBuzzerOff() {
 
 static void advanceOccurrence() {
   kaOccurrenceIndex++;
-  if (kaOccurrenceIndex >= TOTAL_OCCURRENCES) {
+  if (kaOccurrenceIndex >= kaTotalOccurrences) {
     kaState = KA_IDLE;
     return;
   }
@@ -34,12 +35,18 @@ static void advanceOccurrence() {
   kaOccurrenceDismissed = false;
 }
 
-void startKeepAwake() {
+void startKeepAwake(KeepAwakeMode mode) {
+  if (mode == KA_OFF) return;
+
+  unsigned long duration = (mode == KA_2HR) ? KEEP_AWAKE_DURATION_2HR_MS : KEEP_AWAKE_DURATION_15MIN_MS;
+  kaTotalOccurrences     = duration / KEEP_AWAKE_INTERVAL_MS;
+
   kaState               = KA_WAITING;
   kaWindowStartedAt     = millis();
   kaOccurrenceIndex     = 0;
   kaOccurrenceDismissed = false;
-  Serial.println("Keep-awake sequence started.");
+  Serial.printf("Keep-awake sequence started (%s mode, %d occurrence(s)).\n",
+                keepAwakeModeToString(mode), kaTotalOccurrences);
 }
 
 void cancelKeepAwake() {
@@ -99,8 +106,15 @@ bool dismissKeepAwake() {
   unsigned long elapsed = millis() - kaWindowStartedAt;
   unsigned long dueAt   = occurrenceDueAt();
   if (dueAt - elapsed <= KEEP_AWAKE_DISMISS_WINDOW_MS) {
-    kaOccurrenceDismissed = true;
-    Serial.println("Keep-awake next occurrence pre-dismissed.");
+    if (kaOccurrenceIndex + 1 >= kaTotalOccurrences) {
+      // Last occurrence — end the sequence now rather than waiting for its
+      // due time, so isKeepAwakeActive()/status reflect "off" immediately.
+      kaState = KA_IDLE;
+      Serial.println("Keep-awake sequence ended (last occurrence pre-dismissed).");
+    } else {
+      kaOccurrenceDismissed = true;
+      Serial.println("Keep-awake next occurrence pre-dismissed.");
+    }
     return true;
   }
   return false;

@@ -9,6 +9,7 @@
 static unsigned long alarmStartedAt  = 0;
 static unsigned long buzzerLastToggle = 0;
 static bool          buzzerToneOn     = false;
+static int           ringingDay       = -1; // schedule[] index the current/last alarm belongs to
 
 struct AlarmPhase {
   unsigned long minElapsed; // ms
@@ -27,9 +28,10 @@ static const AlarmPhase ALARM_PHASES[] = {
   { 180000, 0xFFFFFFFFUL, 0, 0}
 };
 
-void startBuzzer() {
+void startBuzzer(int day) {
   digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
   alarmState       = ALARM;
+  ringingDay       = day;
   alarmStartedAt = buzzerLastToggle = millis();
   buzzerToneOn     = true;
   Serial.println("Buzzer ON");
@@ -52,7 +54,7 @@ void dismiss() {
   todayCancelled = true;
   Serial.println("Alarm dismissed / cancelled for today.");
   cancelKeepAwake();
-  if (wasRinging) startKeepAwake();
+  if (wasRinging) startKeepAwake(schedule[ringingDay].keepAwake);
   logNextAlarm();
 }
 
