@@ -37,6 +37,7 @@
 #include "globals.h"
 #include "schedule.h"
 #include "alarm.h"
+#include "keep_awake.h"
 #include "display.h"
 #include "network.h"
 #include "http_server.h"
@@ -128,6 +129,9 @@ void loop() {
 
   // Non-blocking buzzer escalation
   handleBuzzerEscalation();
+  handleKeepAwake();
+
+  static int lastKnownHour = -1, lastKnownMinute = -1;
 
   // Display + alarm check at 1 Hz
   if (now - lastDisplayUpdate >= 1000) {
@@ -164,7 +168,9 @@ void loop() {
         }
       }
 
-      alarmArmed = (alarmMins > curMins && !todayCancelled) || schedule[tomorrowIdx].enabled;
+      alarmArmed      = (alarmMins > curMins && !todayCancelled) || schedule[tomorrowIdx].enabled;
+      lastKnownHour   = tm.tm_hour;
+      lastKnownMinute = tm.tm_min;
       updateDisplay(tm.tm_hour, tm.tm_min);
 
       static int  lastDay        = -1;
@@ -178,7 +184,7 @@ void loop() {
 
       if (!todayCancelled) {
         if (alarmMins >= 0 && alarmState == IDLE && curMins >= alarmMins)
-          startBuzzer();
+          startBuzzer(todayIdx);
       }
 
       // Periodic NTP re-sync at true wall-clock hour (DST-correct)
@@ -189,6 +195,14 @@ void loop() {
     } else {
       showDashes();
     }
+  }
+
+  // Faster refresh so the alarm/keep-awake indicator dot can blink at ~1 Hz
+  // (the 1 Hz block above is too coarse to show a sub-second flash).
+  static unsigned long lastIndicatorUpdate = 0;
+  if (lastKnownHour >= 0 && now - lastIndicatorUpdate >= 250) {
+    lastIndicatorUpdate = now;
+    updateDisplay(lastKnownHour, lastKnownMinute);
   }
 
   // WiFi watchdog

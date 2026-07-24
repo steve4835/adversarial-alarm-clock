@@ -48,6 +48,18 @@ The buzzer escalates through six phases, keyed on milliseconds elapsed since the
 
 Dismissal stops the buzzer and marks today's alarm cancelled. The alarm will not re-fire until the next scheduled day.
 
+### Keep-awake
+
+Dismissing an alarm that was actually ringing starts a keep-awake sequence for that day, to catch falling back asleep. Chirps always land on a 15-min grid; each day's mode sets how long that grid runs:
+
+| Mode | Behavior |
+|------|----------|
+| `off` | No keep-awake |
+| `15min` (default) | One chirp, 15 min after dismissal |
+| `2hr` | Chirps every 15 min for 2 hours (8 occurrences) |
+
+Each chirp is a 250 ms tone repeating every 2 s. `POST /dismissKeepAwake` (no body) silences the chirp currently sounding, or pre-empts the next one if called within 5 minutes of it — same window shown by the "Dismiss Keep-Awake Chirp" button in the web UI.
+
 ## Control interfaces
 
 ### HTTP
@@ -58,10 +70,12 @@ Dismissal stops the buzzer and marks today's alarm cancelled. The alarm will not
 | GET | `/status` | JSON status (time, state, next alarm, hw info) |
 | POST | `/alarm?day=mon&h=6&m=30` | Set a day's alarm time |
 | POST | `/alarm?day=sat&enabled=0` | Disable a day |
+| POST | `/alarm?day=mon&keepAwake=2hr` | Set a day's keep-awake mode (`off`/`15min`/`2hr`) |
 | POST | `/dismiss` | Dismiss or pre-empt; body must contain the dismiss token |
+| POST | `/dismissKeepAwake` | Silence the current/next keep-awake chirp; no body required |
 | POST | `/alarm/ui` | Form handler for the web UI schedule save |
 
-The dismiss token is set at build time via `CONF_DISMISS_TOKEN` (see Configuration). The request body is scanned for the token string; a simple `{"token":"<value>"}` payload works.
+The dismiss token is set at build time via `CONF_DISMISS_TOKEN` (see Configuration). The request body is scanned for the token string; a simple `{"token":"<value>"}` payload works. `/dismissKeepAwake` takes no token — it can only silence a chirp, not the main alarm.
 
 ### MQTT (optional)
 
@@ -77,7 +91,7 @@ Day names are lowercase three-letter abbreviations: `sun`, `mon`, `tue`, `wed`, 
 
 ## Schedule persistence
 
-The per-day schedule is stored in the ESP32's NVS (non-volatile storage) via the `Preferences` library under the namespace `schedule`. On first boot the default is 06:30 Mon–Fri, disabled Sat–Sun. Changes via HTTP or MQTT are written immediately.
+The per-day schedule is stored in the ESP32's NVS (non-volatile storage) via the `Preferences` library under the namespace `schedule`. On first boot the default is 06:30 Mon–Fri, disabled Sat–Sun, keep-awake mode `15min`. Changes via HTTP or MQTT are written immediately.
 
 ## Time keeping
 

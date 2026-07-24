@@ -40,3 +40,15 @@ constexpr bool SHOW_DISMISS_ON_WEB = false;
 
 // Dismiss token — must match the "token" field in the POST /dismiss body
 static const char* const DISMISS_TOKEN = CONF_DISMISS_TOKEN;
+
+// Keep-awake — periodic chirps after the main alarm is dismissed, to catch
+// falling back asleep. Interval is always 15 min; per-day mode (off/15min/2hr,
+// see schedule[d].keepAwake) picks how long that grid runs (KEEP_AWAKE_DURATION_15MIN_MS
+// = a single occurrence, KEEP_AWAKE_DURATION_2HR_MS = 8 occurrences).
+constexpr unsigned long KEEP_AWAKE_INTERVAL_MS        = 15UL * 60 * 1000;
+constexpr unsigned long KEEP_AWAKE_DURATION_15MIN_MS  = 15UL * 60 * 1000;
+constexpr unsigned long KEEP_AWAKE_DURATION_2HR_MS    = 2UL * 60 * 60 * 1000;
+constexpr unsigned long KEEP_AWAKE_CHIRP_WINDOW_MS    = 60UL * 1000;
+constexpr unsigned long KEEP_AWAKE_CHIRP_ON_MS        = 100;
+constexpr unsigned long KEEP_AWAKE_CHIRP_PERIOD_MS    = 2000;
+constexpr unsigned long KEEP_AWAKE_DISMISS_WINDOW_MS  = 5UL * 60 * 1000;

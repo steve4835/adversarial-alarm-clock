@@ -2,12 +2,14 @@
 #include "alarm.h"
 #include "config.h"
 #include "schedule.h"
+#include "keep_awake.h"
 #include <time.h>
 
 // Module-private state; not exposed through globals
 static unsigned long alarmStartedAt  = 0;
 static unsigned long buzzerLastToggle = 0;
 static bool          buzzerToneOn     = false;
+static int           ringingDay       = -1; // schedule[] index the current/last alarm belongs to
 
 struct AlarmPhase {
   unsigned long minElapsed; // ms
@@ -26,9 +28,10 @@ static const AlarmPhase ALARM_PHASES[] = {
   { 180000, 0xFFFFFFFFUL, 0, 0}
 };
 
-void startBuzzer() {
+void startBuzzer(int day) {
   digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? LOW : HIGH);
   alarmState       = ALARM;
+  ringingDay       = day;
   alarmStartedAt = buzzerLastToggle = millis();
   buzzerToneOn     = true;
   Serial.println("Buzzer ON");
@@ -36,7 +39,7 @@ void startBuzzer() {
 
 void resetTodayCancelledIfSafe() {
   struct tm tm;
-  if (!getLocalTime(&tm)) { todayCancelled = false; return; }
+  if (!getLocalTime(&tm)) return;
   int curMins   = tm.tm_hour * 60 + tm.tm_min;
   int alarmMins = schedule[tm.tm_wday].enabled
                   ? schedule[tm.tm_wday].hour * 60 + schedule[tm.tm_wday].minute
@@ -45,10 +48,13 @@ void resetTodayCancelledIfSafe() {
 }
 
 void dismiss() {
+  bool wasRinging = (alarmState == ALARM);
   digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
   alarmState     = IDLE;
   todayCancelled = true;
   Serial.println("Alarm dismissed / cancelled for today.");
+  cancelKeepAwake();
+  if (wasRinging) startKeepAwake(schedule[ringingDay].keepAwake);
   logNextAlarm();
 }
 
