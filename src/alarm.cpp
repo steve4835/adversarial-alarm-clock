@@ -53,8 +53,18 @@ void dismiss() {
   alarmState     = IDLE;
   todayCancelled = true;
   Serial.println("Alarm dismissed / cancelled for today.");
+
+  // Keep-awake is a safety net for falling back asleep, so it should still run
+  // even when the alarm is dismissed pre-emptively (before it ever rang). In
+  // that case ringingDay is stale/unset, so fall back to today's schedule slot.
+  int kaDay = wasRinging ? ringingDay : -1;
+  if (kaDay < 0) {
+    struct tm tm;
+    if (getLocalTime(&tm)) kaDay = tm.tm_wday;
+  }
+
   cancelKeepAwake();
-  if (wasRinging) startKeepAwake(schedule[ringingDay].keepAwake);
+  if (kaDay >= 0) startKeepAwake(schedule[kaDay].keepAwake);
   logNextAlarm();
 }
 
