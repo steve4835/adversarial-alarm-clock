@@ -20,11 +20,10 @@ struct AlarmPhase {
 
 // Each phase is active while elapsed is in [minElapsed, maxElapsed).
 static const AlarmPhase ALARM_PHASES[] = {
-  {      0,  30000, 10000, 250},
-  {  30000,  60000,  5000, 250},
-  {  60000, 120000,  1000, 200},
-  { 120000, 150000,   500, 150},
-  { 150000, 180000,   200, 150},
+  {      0,  60000, 10000, 100},
+  {  30000,  120000,  5000, 100},
+  { 120000, 150000,   500, 100},
+  { 150000, 180000,   200, 75},
   { 180000, 0xFFFFFFFFUL, 0, 0}
 };
 
