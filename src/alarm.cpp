@@ -20,11 +20,10 @@ struct AlarmPhase {
 
 // Each phase is active while elapsed is in [minElapsed, maxElapsed).
 static const AlarmPhase ALARM_PHASES[] = {
-  {      0,  60000, 10000, 100},
-  {  30000,  120000,  5000, 100},
-  { 120000, 150000,   500, 100},
-  { 150000, 180000,   200, 75},
-  { 180000, 0xFFFFFFFFUL, 0, 0}
+  {      0, 60000, 15000, 100},
+  {  60000, 120000, 5000, 100},
+  { 120000, 150000, 1000, 100},
+  { 150000, 0xFFFFFFFFUL, 200,  75},
 };
 
 void startBuzzer(int day) {
