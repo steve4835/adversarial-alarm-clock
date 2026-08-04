@@ -47,6 +47,8 @@ void resetTodayCancelledIfSafe() {
 
 void dismiss() {
   bool wasRinging = (alarmState == ALARM);
+  bool wasDismissed = !todayCancelled;
+
   digitalWrite(GPIO_BUZZER, BUZZER_ACTIVE_LOW ? HIGH : LOW);
   alarmState     = IDLE;
   todayCancelled = true;
@@ -62,7 +64,7 @@ void dismiss() {
   }
 
   cancelKeepAwake();
-  if (kaDay >= 0) startKeepAwake(schedule[kaDay].keepAwake);
+  if (kaDay >= 0 && wasDismissed) startKeepAwake(schedule[kaDay].keepAwake);
   logNextAlarm();
 }
 
