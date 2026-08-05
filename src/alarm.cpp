@@ -63,7 +63,11 @@ void dismiss() {
     if (getLocalTime(&tm)) kaDay = tm.tm_wday;
   }
 
-  cancelKeepAwake();
+  // Cancel existing keep-awake only when a new alarm is being dismissed for the first time
+  // This allows KA to persist across multiple dismissals (including during 5-min dismiss window)
+  if (wasRinging && !wasDismissed && isKeepAwakeActive()) {
+    cancelKeepAwake();
+  }
   if (kaDay >= 0 && wasDismissed) startKeepAwake(schedule[kaDay].keepAwake);
   logNextAlarm();
 }
